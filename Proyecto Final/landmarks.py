@@ -175,6 +175,88 @@ class ExtractorLandmarks:
         }
         return vector_fallback, info_fallback
 
+    def obtener_geometria_mano_rostro(self, results: Any) -> Dict[str, Any]:
+        """
+        Extrae explícitamente el estado de la mano, del rostro y la relación espacial entre ambos.
+        Permite validar que exista movimiento manual real cerca del rostro antes de clasificar dinámicas.
+        """
+        datos = {
+            "hay_mano": False,
+            "hay_mano_izq": False,
+            "hay_mano_der": False,
+            "centroide_mano": None,
+            "hay_rostro": False,
+            "posicion_nariz": None,
+            "altura_hombros": None,
+            "mano_en_zona_activa": False,
+            "distancia_mano_rostro": None
+        }
+
+        if self.usar_mediapipe and results is not None:
+            # 1. Verificar presencia de manos y calcular centroide
+            puntos_mano = []
+            if getattr(results, 'left_hand_landmarks', None):
+                datos["hay_mano_izq"] = True
+                puntos_mano.extend([(lm.x, lm.y) for lm in results.left_hand_landmarks.landmark])
+            if getattr(results, 'right_hand_landmarks', None):
+                datos["hay_mano_der"] = True
+                puntos_mano.extend([(lm.x, lm.y) for lm in results.right_hand_landmarks.landmark])
+
+            if puntos_mano:
+                datos["hay_mano"] = True
+                arr_p = np.array(puntos_mano)
+                cx = float(np.mean(arr_p[:, 0]))
+                cy = float(np.mean(arr_p[:, 1]))
+                datos["centroide_mano"] = (cx, cy)
+
+            # 2. Verificar rostro y pose corporal
+            if getattr(results, 'pose_landmarks', None):
+                pose = results.pose_landmarks.landmark
+                # Nariz es landmark 0
+                nariz = pose[0]
+                if nariz.visibility > 0.4:
+                    datos["hay_rostro"] = True
+                    datos["posicion_nariz"] = (float(nariz.x), float(nariz.y))
+
+                # Hombros son landmarks 11 y 12
+                h_izq = pose[11]
+                h_der = pose[12]
+                if h_izq.visibility > 0.3 and h_der.visibility > 0.3:
+                    datos["altura_hombros"] = float((h_izq.y + h_der.y) / 2.0)
+
+            # 3. Relación espacial mano - rostro / torso
+            if datos["hay_mano"] and datos["centroide_mano"] is not None:
+                _, cy_mano = datos["centroide_mano"]
+
+                # La mano está en zona activa si está a la altura de los hombros o el rostro
+                if datos["altura_hombros"] is not None:
+                    datos["mano_en_zona_activa"] = cy_mano <= (datos["altura_hombros"] + 0.15)
+                elif datos["posicion_nariz"] is not None:
+                    datos["mano_en_zona_activa"] = cy_mano <= (datos["posicion_nariz"][1] + 0.35)
+                else:
+                    datos["mano_en_zona_activa"] = cy_mano < 0.85
+
+                if datos["posicion_nariz"] is not None:
+                    nx, ny = datos["posicion_nariz"]
+                    mx, my = datos["centroide_mano"]
+                    dist = float(np.sqrt((mx - nx)**2 + (my - ny)**2))
+                    datos["distancia_mano_rostro"] = dist
+
+        elif self.modo_fallback and isinstance(results, dict):
+            # Fallback
+            cara = results.get("cara")
+            manos = results.get("manos", [])
+            if cara is not None:
+                datos["hay_rostro"] = True
+                datos["posicion_nariz"] = (cara[0] / FRAME_ANCHO, cara[1] / FRAME_ALTO)
+            if manos:
+                datos["hay_mano"] = True
+                m = manos[0]
+                datos["centroide_mano"] = ((m[0] + m[2]/2) / FRAME_ANCHO, (m[1] + m[3]/2) / FRAME_ALTO)
+                datos["mano_en_zona_activa"] = True
+
+        return datos
+
     def dibujar_landmarks(self, frame_bgr: np.ndarray, results: Any) -> np.ndarray:
         """Dibuja los puntos sobre el frame original."""
         frame_copia = frame_bgr.copy()

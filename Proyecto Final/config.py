@@ -39,10 +39,20 @@ CANTIDAD_LANDMARKS_POSE = 33 * 3
 TOTAL_CARACTERISTICAS = (CANTIDAD_LANDMARKS_MANO * 2) + CANTIDAD_LANDMARKS_POSE
 
 # Umbrales de reconocimiento y traducción
-UMBRAL_CONFIANZA = 0.70  # Confianza mínima para aceptar una predicción
-VENTANA_SUAVIZADO = 7    # Cantidad de predicciones para suavizado temporal (moda/media)
-TIEMPO_DEBOUNCE_SEGUNDOS = 1.5  # Tiempo mínimo entre palabras consecutivas idénticas
-TIEMPO_AUTO_ESPACIO_SEGUNDOS = 3.5  # Pausa sin señas para insertar espacio o cierre
+UMBRAL_CONFIANZA = 0.65  # Confianza mínima para aceptar una predicción
+VENTANA_SUAVIZADO = 7    # Cantidad de predicciones para suavizado temporal
+TIEMPO_DEBOUNCE_SEGUNDOS = 1.2  # Tiempo mínimo entre palabras distintas
+TIEMPO_CONFIRMACION_ESTATICA = 0.60  # Segundos que la mano debe estar quieta para confirmar letra
+TIEMPO_ESTABILIDAD_ESTATICA = TIEMPO_CONFIRMACION_ESTATICA  # Alias de compatibilidad
+TIEMPO_COOLDOWN_POST_DETECCION = 1.50  # Segundos de espera tras detectar antes de admitir la siguiente seña
+TIEMPO_AUTO_ESPACIO_SEGUNDOS = 4.0  # Pausa sin señas para insertar espacio o cierre
+UMBRAL_MOVIMIENTO_DINAMICO = 0.040  # Varianza/velocidad de landmarks para considerar movimiento activo
+UMBRAL_PRESENCIA_MANO = 0.05  # Magnitud mínima para considerar que hay una mano en pantalla
+
+# Modos de reconocimiento disponibles
+MODO_AUTO = "AUTO (HIBRIDO)"
+MODO_SOLO_ESTATICO = "SOLO ESTATICO"
+MODO_SOLO_DINAMICO = "SOLO DINAMICO"
 
 # Hiperparámetros de entrenamiento
 BATCH_SIZE = 16

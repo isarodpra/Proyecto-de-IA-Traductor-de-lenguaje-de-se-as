@@ -139,3 +139,70 @@ def unir_paneles(panel_izquierdo: np.ndarray, panel_derecho: np.ndarray) -> np.n
     # Línea divisoria central
     cv2.line(combinado, (w1, 0), (w1, h1), (60, 60, 60), 2)
     return combinado
+
+
+def dibujar_panel_traduccion_multilinea(
+    frame: np.ndarray,
+    texto_oracion: str,
+    alto_panel: int = 80,
+    fuente_escala: float = 0.58,
+    max_lineas_visibles: int = 2
+) -> None:
+    """
+    Renderiza la traducción acumulada en la parte inferior de la pantalla con word-wrapping
+    y autoscroll para soportar oraciones largas sin salirse de los límites de la ventana.
+    """
+    alto_f, ancho_f = frame.shape[:2]
+    y_inicio = alto_f - alto_panel
+
+    # Fondo oscuro con borde superior decorativo
+    superponer_panel_translucido(frame, 0, y_inicio, ancho_f, alto_panel, (12, 12, 12), alpha=0.92)
+    cv2.line(frame, (0, y_inicio), (ancho_f, y_inicio), (0, 200, 255), 2)
+
+    fuente = cv2.FONT_HERSHEY_SIMPLEX
+    margen_x = 18
+    ancho_disponible = ancho_f - (margen_x * 2)
+
+    # Encabezado
+    txt_etiqueta = "TRADUCCION:"
+    cv2.putText(frame, txt_etiqueta, (margen_x, y_inicio + 22),
+                fuente, 0.50, (0, 220, 255), 1, cv2.LINE_AA)
+
+    if not texto_oracion:
+        cv2.putText(frame, "(Realice una sena frente a la camara para comenzar a traducir...)",
+                    (margen_x, y_inicio + 52), fuente, 0.52, (140, 140, 140), 1, cv2.LINE_AA)
+        return
+
+    # Algoritmo de división de palabras (Word Wrapping)
+    palabras = texto_oracion.split()
+    lineas = []
+    linea_actual = ""
+
+    for palabra in palabras:
+        prueba = (linea_actual + " " + palabra).strip()
+        (w_prueba, _), _ = cv2.getTextSize(prueba, fuente, fuente_escala, 1)
+        if w_prueba <= ancho_disponible:
+            linea_actual = prueba
+        else:
+            if linea_actual:
+                lineas.append(linea_actual)
+            linea_actual = palabra
+    if linea_actual:
+        lineas.append(linea_actual)
+
+    # Si hay más líneas de las que caben, hacer autoscroll mostrando las últimas
+    if len(lineas) > max_lineas_visibles:
+        lineas_a_mostrar = lineas[-max_lineas_visibles:]
+        # Agregar indicador de que hay texto previo
+        cv2.putText(frame, f"[+{len(lineas) - max_lineas_visibles} lineas previas]",
+                    (ancho_f - 160, y_inicio + 22), fuente, 0.42, (180, 180, 180), 1, cv2.LINE_AA)
+    else:
+        lineas_a_mostrar = lineas
+
+    # Dibujar líneas de texto
+    y_linea = y_inicio + 48
+    for i, l in enumerate(lineas_a_mostrar):
+        cursor = " _" if (i == len(lineas_a_mostrar) - 1) else ""
+        cv2.putText(frame, l + cursor, (margen_x, y_linea),
+                    fuente, fuente_escala, (255, 255, 255), 2, cv2.LINE_AA)
+        y_linea += 24

@@ -24,12 +24,50 @@ from utils import dibujar_texto_con_fondo, superponer_panel_translucido, unir_pa
 
 
 def iniciar_interfaz_captura():
-    """Flujo de consola interactivo para configurar y comenzar la captura de señas."""
+    """Flujo de consola interactivo para configurar y comenzar la captura de señas con selección."""
     print("\n" + "=" * 55)
     print("        MÓDULO DE REGISTRO DE SEÑAS Y MUESTRAS")
     print("=" * 55)
 
-    nombre = input(">> Ingrese el nombre de la seña (ej. HOLA, GRACIAS, A): ").strip()
+    senas_existentes = db.obtener_todas_las_senas()
+
+    if senas_existentes:
+        print("\nSeñas registradas en el catálogo:")
+        for idx, s in enumerate(senas_existentes, 1):
+            conteos = db.obtener_conteo_muestras_por_sena(s["id"])
+            print(f"  {idx}. {s['nombre']:<12} | Tipo: {s['tipo']:<9} | Train: {conteos['entrenamiento']} | Val: {conteos['validacion']}")
+
+        print("\nOpciones disponibles:")
+        print("  [1-{}] Seleccionar seña existente para agregar muestras".format(len(senas_existentes)))
+        print("  [N]   Registrar una NUEVA seña")
+        print("  [0]   Regresar al menú principal")
+
+        eleccion = input("\n>> Ingrese su opción: ").strip()
+
+        if eleccion == "0":
+            return
+        elif eleccion.upper() == "N":
+            # Proceder a registrar nueva
+            _capturar_nueva_sena()
+        else:
+            try:
+                num = int(eleccion)
+                if 1 <= num <= len(senas_existentes):
+                    sena_sel = senas_existentes[num - 1]
+                    print(f"\n[OK] Seleccionada: '{sena_sel['nombre']}' (ID: {sena_sel['id']}, Tipo: {sena_sel['tipo']})")
+                    ejecutar_captura_en_vivo(sena_sel["id"], sena_sel["nombre"], sena_sel["tipo"])
+                else:
+                    print("[!] Número de seña inválido.")
+            except ValueError:
+                print("[!] Opción no reconocida.")
+    else:
+        print("\nNo hay señas registradas aún. Registraremos la primera.")
+        _capturar_nueva_sena()
+
+
+def _capturar_nueva_sena():
+    """Solicita los datos para una nueva seña y arranca la captura."""
+    nombre = input("\n>> Ingrese el nombre de la nueva seña (ej. HOLA, GRACIAS, A): ").strip()
     if not nombre:
         print("[!] Nombre inválido. Operación cancelada.")
         return
@@ -37,15 +75,13 @@ def iniciar_interfaz_captura():
     print("\nSeleccione el tipo de seña:")
     print("  1. Estática (Letras del abecedario, números, gestos fijos)")
     print("  2. Dinámica (Palabras con movimiento secuencial de manos)")
-    opcion_tipo = input("Opción (1/2, default: 1): ").strip()
+    opcion_tipo = input(">> Opción [1/2] (default: 1): ").strip()
     tipo = "dinamica" if opcion_tipo == "2" else "estatica"
 
     descripcion = input(">> Descripción opcional (ej. Saludo con palma abierta): ").strip()
 
-    # Registrar o recuperar ID de seña en SQLite
     sena_id = db.registrar_o_obtener_sena(nombre, tipo, descripcion)
-    print(f"\n[✓] Seña '{nombre.upper()}' registrada (ID: {sena_id}, Tipo: {tipo}).")
-
+    print(f"\n[OK] Seña '{nombre.upper()}' registrada (ID: {sena_id}, Tipo: {tipo}).")
     ejecutar_captura_en_vivo(sena_id, nombre.upper(), tipo)
 
 
@@ -218,4 +254,4 @@ def ejecutar_captura_en_vivo(sena_id: int, nombre_sena: str, tipo_sena: str):
         cap.release()
         extractor.cerrar()
         cv2.destroyAllWindows()
-        print("\n[✓] Sesión de captura finalizada.")
+        print("\n[OK] Sesión de captura finalizada.")

@@ -1,14 +1,14 @@
 """
 Módulo de Traducción y Síntesis de Lenguaje de Señas.
 Convierte secuencias de señas reconocidas en oraciones coherentes en español,
-aplica algoritmos de 'debounce' para evitar repeticiones no deseadas,
-aplica diccionario contextual de corrección y síntesis de voz por hilo desacoplado.
+aplica algoritmos de control de estado (transición, reposo y estabilidad),
+evita el spam de repeticiones continuas y emite voz desacoplada con pyttsx3.
 """
 
 import time
 import threading
-from typing import List, Dict, Optional
-from config import TIEMPO_DEBOUNCE_SEGUNDOS, TIEMPO_AUTO_ESPACIO_SEGUNDOS
+from typing import List, Dict, Optional, Tuple
+from config import TIEMPO_DEBOUNCE_SEGUNDOS, TIEMPO_ESTABILIDAD_ESTATICA, TIEMPO_AUTO_ESPACIO_SEGUNDOS
 
 # Intentar importar motor de voz pyttsx3
 HAY_TTS = False
@@ -52,16 +52,14 @@ class MotorVozAsincrono:
                     engine.say(texto_a_decir)
                     engine.runAndWait()
                 else:
-                    time.sleep(0.1)
-        except Exception as e:
-            # En caso de error de hardware de audio, deshabilitar sin interrumpir el video
+                    time.sleep(0.08)
+        except Exception:
             self.disponible = False
 
 
 class TraductorSecuencias:
-    """Administra el buffer de palabras reconocidas, debounce y formación de oraciones."""
+    """Administra el buffer de palabras reconocidas, control de reposo y formación de oraciones."""
 
-    # Diccionario de equivalencias y mejoras contextuales
     MAPEO_PALABRAS = {
         "HOLA": "Hola",
         "ADIOS": "Adiós",
@@ -85,52 +83,120 @@ class TraductorSecuencias:
         ("Sí", "Muchas gracias"): "Sí, muchas gracias."
     }
 
-    def __init__(self, tiempo_debounce: float = TIEMPO_DEBOUNCE_SEGUNDOS):
-        self.tiempo_debounce = tiempo_debounce
-        self.ultima_palabra: Optional[str] = None
-        self.tiempo_ultima_palabra: float = 0.0
+    def __init__(self, tiempo_estabilidad: float = TIEMPO_ESTABILIDAD_ESTATICA):
+        self.tiempo_estabilidad = tiempo_estabilidad
         self.palabras_acumuladas: List[str] = []
         self.motor_voz = MotorVozAsincrono()
 
-    def agregar_prediccion(self, etiqueta_clase: str, confianza: float) -> Optional[str]:
+        # Variables de control de estado
+        self.seña_en_observacion: Optional[str] = None
+        self.tiempo_inicio_seña: float = 0.0
+        self.ultima_seña_confirmada: Optional[str] = None
+        self.mano_en_reposo: bool = True
+        self.tiempo_ultimo_evento: float = time.time()
+
+    def notificar_reposo(self):
+        """Indica que no hay mano detectada o que la mano está bajada."""
+        self.mano_en_reposo = True
+        self.seña_en_observacion = None
+        self.tiempo_inicio_seña = 0.0
+
+    def procesar_seña_estatica(self, etiqueta_clase: str, confianza: float) -> Optional[str]:
         """
-        Recibe una predicción del modelo y la agrega a la oración si supera el filtro debounce.
-        Retorna la palabra añadida o None si fue filtrada.
+        Procesa una seña estática (letra o postura fija).
+        Solo se confirma cuando la postura se mantiene estable durante tiempo_estabilidad.
+        NO se vuelve a emitir mientras el usuario mantenga la misma postura.
         """
         ahora = time.time()
-        palabra_traducida = self.MAPEO_PALABRAS.get(etiqueta_clase.upper(), etiqueta_clase.capitalize())
 
-        # Comprobar condición de debounce: misma palabra en un lapso corto
-        if palabra_traducida == self.ultima_palabra:
-            if (ahora - self.tiempo_ultima_palabra) < self.tiempo_debounce:
-                return None  # Supresión por rebote/repetición continua
+        if etiqueta_clase != self.seña_en_observacion:
+            # Cambio de postura detectado: reiniciar cronómetro de estabilidad
+            self.seña_en_observacion = etiqueta_clase
+            self.tiempo_inicio_seña = ahora
+            return None
 
-        # Agregar nueva palabra
-        self.palabras_acumuladas.append(palabra_traducida)
-        self.ultima_palabra = palabra_traducida
-        self.tiempo_ultima_palabra = ahora
+        # Si se mantiene la misma postura
+        duracion_estable = ahora - self.tiempo_inicio_seña
+        if duracion_estable >= self.tiempo_estabilidad:
+            # Solo confirmar si es diferente a la última confirmada O si hubo reposo intermedio
+            if (etiqueta_clase != self.ultima_seña_confirmada) or self.mano_en_reposo:
+                palabra = self.MAPEO_PALABRAS.get(etiqueta_clase.upper(), etiqueta_clase.upper())
+                self._insertar_token(palabra)
+                self.ultima_seña_confirmada = etiqueta_clase
+                self.mano_en_reposo = False
+                self.tiempo_ultimo_evento = ahora
+                self.motor_voz.hablar(palabra)
+                return palabra
 
-        # Pronunciar la palabra si la voz está activa
-        self.motor_voz.hablar(palabra_traducida)
-        return palabra_traducida
+        return None
+
+    def procesar_gesto_dinamico(self, etiqueta_clase: str, confianza: float) -> Optional[str]:
+        """
+        Procesa un gesto dinámico (trayectoria culminada).
+        Se inserta una sola vez al terminar el movimiento.
+        """
+        ahora = time.time()
+        # Para dinámicas, aplicar debounce básico entre el mismo gesto
+        if (etiqueta_clase == self.ultima_seña_confirmada) and not self.mano_en_reposo:
+            if (ahora - self.tiempo_ultimo_evento) < TIEMPO_DEBOUNCE_SEGUNDOS:
+                return None
+
+        palabra = self.MAPEO_PALABRAS.get(etiqueta_clase.upper(), etiqueta_clase.capitalize())
+        self._insertar_token(palabra)
+        self.ultima_seña_confirmada = etiqueta_clase
+        self.mano_en_reposo = False
+        self.tiempo_ultimo_evento = ahora
+        self.motor_voz.hablar(palabra)
+        return palabra
+
+    def _insertar_token(self, token: str):
+        """Agrega el token a la lista acumulada."""
+        self.palabras_acumuladas.append(token)
+
+    def borrar_ultimo(self) -> bool:
+        """Elimina el último elemento agregado."""
+        if self.palabras_acumuladas:
+            self.palabras_acumuladas.pop()
+            self.ultima_seña_confirmada = None
+            return True
+        return False
 
     def obtener_oracion_actual(self) -> str:
-        """Genera la oración completa acumulada aplicando reglas de diccionarios de patrones."""
+        """Construye la oración actual uniendo letras consecutivas o separando palabras."""
         if not self.palabras_acumuladas:
             return ""
 
-        # Verificar si las últimas dos palabras forman un patrón especial
-        if len(self.palabras_acumuladas) >= 2:
-            par = (self.palabras_acumuladas[-2], self.palabras_acumuladas[-1])
+        # Formar texto uniendo letras continuas y espaciando palabras completas
+        partes = []
+        token_actual = ""
+
+        for item in self.palabras_acumuladas:
+            # Si es letra individual (longitud 1)
+            if len(item) == 1 and item.isalpha():
+                token_actual += item
+            else:
+                if token_actual:
+                    partes.append(token_actual)
+                    token_actual = ""
+                partes.append(item)
+
+        if token_actual:
+            partes.append(token_actual)
+
+        # Reglas contextuales de unión de palabras
+        if len(partes) >= 2:
+            par = (partes[-2], partes[-1])
             if par in self.PATRONES_ORACIONES:
-                base = self.palabras_acumuladas[:-2]
+                base = partes[:-2]
                 oracion_unida = " ".join(base) + (" " if base else "") + self.PATRONES_ORACIONES[par]
                 return oracion_unida.strip()
 
-        return " ".join(self.palabras_acumuladas).strip()
+        return " ".join(partes).strip()
 
     def limpiar(self):
-        """Reinicia la oración actual."""
+        """Reinicia la oración actual y el estado."""
         self.palabras_acumuladas.clear()
-        self.ultima_palabra = None
-        self.tiempo_ultima_palabra = 0.0
+        self.ultima_seña_confirmada = None
+        self.seña_en_observacion = None
+        self.tiempo_inicio_seña = 0.0
+        self.mano_en_reposo = True

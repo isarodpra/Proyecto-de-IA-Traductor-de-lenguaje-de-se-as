@@ -1,5 +1,22 @@
 {
-  "0": "HOLA",
-  "1": "GRACIAS",
-  "2": "ADIOS"
+  "estaticas": [
+    "A",
+    "B"
+  ],
+  "dinamicas": [
+    "_NO_GESTO",
+    "HOLA"
+  ],
+  "tipo_por_clase": {
+    "A": "estatica",
+    "B": "estatica",
+    "_NO_GESTO": "dinamica",
+    "HOLA": "dinamica"
+  },
+  "todas": {
+    "0": "A",
+    "1": "B",
+    "2": "_NO_GESTO",
+    "3": "HOLA"
+  }
 }
