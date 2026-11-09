@@ -287,20 +287,28 @@ class ClasificadorCentroides:
         return np.array([np.argmax(self.predict_proba(row)) for row in X])
 
 
-def ejecutar_entrenamiento():
+def ejecutar_entrenamiento(callback_progreso=None) -> Dict[str, Any]:
     """Flujo de entrenamiento híbrido desacoplado con reporte y guardado."""
-    print("\n" + "=" * 58)
-    print("      MÓDULO DE ENTRENAMIENTO DE MODELO DESACOPLADO")
-    print("=" * 58)
+    def log(msg: str):
+        print(msg)
+        if callback_progreso:
+            try:
+                callback_progreso(str(msg))
+            except Exception:
+                pass
+
+    log("\n" + "=" * 58)
+    log("      MÓDULO DE ENTRENAMIENTO DE MODELO DESACOPLADO")
+    log("=" * 58)
 
     try:
-        print("[*] Leyendo y clasificando muestras de la base de datos...")
+        log("[*] Leyendo y clasificando muestras de la base de datos...")
         datos = cargar_datos_clasificados()
         estaticas = datos["estaticas"]
         dinamicas = datos["dinamicas"]
 
-        print(f"[OK] Señas estáticas válidas ({len(estaticas)}): {list(estaticas.keys())}")
-        print(f"[OK] Señas dinámicas válidas ({len(dinamicas)}): {list(dinamicas.keys())}")
+        log(f"[OK] Señas estáticas válidas ({len(estaticas)}): {list(estaticas.keys())}")
+        log(f"[OK] Señas dinámicas válidas ({len(dinamicas)}): {list(dinamicas.keys())}")
 
         modelo_est = None
         clases_est = []
@@ -311,14 +319,14 @@ def ejecutar_entrenamiento():
         acc_din = 0.0
 
         if len(estaticas) >= 1:
-            print("\n[*] Entrenando especialista de señas ESTÁTICAS (1-frame)...")
+            log("\n[*] Entrenando especialista de señas ESTÁTICAS (1-frame)...")
             modelo_est, clases_est, acc_est = entrenar_modelo_estatico(estaticas)
-            print(f"[OK] Modelo estático completado con Accuracy: {acc_est * 100:.2f}%")
+            log(f"[OK] Modelo estático completado con Accuracy: {acc_est * 100:.2f}%")
 
         if len(dinamicas) >= 1:
-            print("\n[*] Entrenando especialista de señas DINÁMICAS (trayectoria 30-frames)...")
+            log("\n[*] Entrenando especialista de señas DINÁMICAS (trayectoria 30-frames)...")
             modelo_din, clases_din, acc_din = entrenar_modelo_dinamico(dinamicas)
-            print(f"[OK] Modelo dinámico completado con Accuracy: {acc_din * 100:.2f}%")
+            log(f"[OK] Modelo dinámico completado con Accuracy: {acc_din * 100:.2f}%")
 
         # Guardar metadatos en etiquetas.json
         todas_las_clases = {}
@@ -342,7 +350,7 @@ def ejecutar_entrenamiento():
 
         with open(RUTA_ETIQUETAS, "w", encoding="utf-8") as f:
             json.dump(metadatos_etiquetas, f, ensure_ascii=False, indent=2)
-        print(f"\n[OK] Metadatos de etiquetas guardados en '{RUTA_ETIQUETAS.name}'.")
+        log(f"\n[OK] Metadatos de etiquetas guardados en '{RUTA_ETIQUETAS.name}'.")
 
         # Guardar paquete de modelo híbrido
         paquete_modelo = {
@@ -353,19 +361,33 @@ def ejecutar_entrenamiento():
             "metadatos": metadatos_etiquetas
         }
         joblib.dump(paquete_modelo, str(RUTA_MODELO_JOBLIB))
-        print(f"[OK] Modelo híbrido guardado exitosamente en: '{RUTA_MODELO_JOBLIB.name}'")
+        log(f"[OK] Modelo híbrido guardado exitosamente en: '{RUTA_MODELO_JOBLIB.name}'")
 
         # Calcular accuracy promedio y registrar en SQLite
         accuracies = [a for a in [acc_est, acc_din] if a > 0]
         acc_promedio = sum(accuracies) / len(accuracies) if accuracies else 1.0
         db.registrar_modelo(str(RUTA_MODELO_JOBLIB), list(todas_las_clases.values()), acc_promedio)
 
-        print("\n" + "=" * 58)
-        print(" [OK] ¡ENTRENAMIENTO COMPLETADO CON ÉXITO!")
-        print(f"     Clases Estáticas reconocibles: {clases_est}")
-        print(f"     Clases Dinámicas reconocibles: {clases_din}")
-        print(f"     Precisión Global Estimada:    {acc_promedio * 100:.2f}%")
-        print("=" * 58)
+        log("\n" + "=" * 58)
+        log(" [OK] ¡ENTRENAMIENTO COMPLETADO CON ÉXITO!")
+        log(f"     Clases Estáticas reconocibles: {clases_est}")
+        log(f"     Clases Dinámicas reconocibles: {clases_din}")
+        log(f"     Precisión Global Estimada:    {acc_promedio * 100:.2f}%")
+        log("=" * 58)
+
+        return {
+            "exito": True,
+            "acc_estatico": acc_est,
+            "acc_dinamico": acc_din,
+            "acc_promedio": acc_promedio,
+            "clases_estaticas": clases_est,
+            "clases_dinamicas": clases_din
+        }
 
     except Exception as e:
-        print(f"\n[ERROR EN ENTRENAMIENTO] {e}")
+        msg_err = f"\n[ERROR EN ENTRENAMIENTO] {e}"
+        log(msg_err)
+        return {
+            "exito": False,
+            "error": str(e)
+        }

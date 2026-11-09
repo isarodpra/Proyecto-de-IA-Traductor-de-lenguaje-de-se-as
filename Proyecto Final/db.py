@@ -125,6 +125,42 @@ def registrar_o_obtener_sena(nombre: str, tipo: str = "estatica", descripcion: s
         return cursor.lastrowid
 
 
+def obtener_o_crear_sena(nombre: str, tipo: str = "estatica", descripcion: str = "") -> int:
+    """Alias compatible con interfaz_gui para registrar_o_obtener_sena."""
+    return registrar_o_obtener_sena(nombre, tipo, descripcion)
+
+
+def obtener_sena_por_nombre(nombre: str) -> Optional[Dict[str, Any]]:
+    """Busca y retorna los metadatos de una seña a partir de su nombre."""
+    nombre_norm = nombre.strip().upper()
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT * FROM senas WHERE nombre = ?", (nombre_norm,))
+        fila = cursor.fetchone()
+        return dict(fila) if fila else None
+
+
+def guardar_configuracion(clave: str, valor: str) -> None:
+    """Inserta o actualiza un parámetro de configuración en la tabla configuracion."""
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("""
+            INSERT INTO configuracion (clave, valor)
+            VALUES (?, ?)
+            ON CONFLICT(clave) DO UPDATE SET valor = excluded.valor;
+        """, (str(clave), str(valor)))
+        conn.commit()
+
+
+def obtener_configuracion(clave: str, por_defecto: str = "") -> str:
+    """Recupera el valor de un parámetro de configuración persistido."""
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT valor FROM configuracion WHERE clave = ?", (str(clave),))
+        fila = cursor.fetchone()
+        return fila["valor"] if fila else por_defecto
+
+
 def guardar_muestra(sena_id: int, conjunto: str, ruta_imagen: Optional[str], ruta_landmarks: str) -> int:
     """Guarda el registro de una muestra individual estática."""
     ahora = datetime.now().isoformat()
@@ -278,3 +314,58 @@ def obtener_estadisticas_generales() -> Dict[str, Any]:
         "detalle_senas": detalle_senas,
         "ultimas_traducciones": ultimas_traducciones
     }
+
+
+def obtener_todas_las_traducciones(limite: int = 500) -> List[Dict[str, Any]]:
+    """Devuelve las traducciones registradas en orden cronológico descendente."""
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT id, texto, predicciones_json, fecha FROM traducciones ORDER BY id DESC LIMIT ?", (limite,))
+        return [dict(row) for row in cursor.fetchall()]
+
+
+def eliminar_traduccion(traduccion_id: int) -> bool:
+    """Elimina una traducción específica por su ID."""
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("DELETE FROM traducciones WHERE id = ?", (traduccion_id,))
+        conn.commit()
+        return cursor.rowcount > 0
+
+
+def limpiar_todas_las_traducciones() -> bool:
+    """Borra todo el historial de traducciones en la base de datos."""
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("DELETE FROM traducciones")
+        conn.commit()
+        return True
+
+
+def exportar_traducciones_csv(ruta_csv: str) -> int:
+    """Exporta todas las traducciones a un archivo CSV estructurado."""
+    import csv
+    traducciones = obtener_todas_las_traducciones(limite=5000)
+    with open(ruta_csv, mode="w", newline="", encoding="utf-8-sig") as f:
+        writer = csv.writer(f)
+        writer.writerow(["ID", "Fecha y Hora", "Texto Traducido", "Predicciones"])
+        for t in traducciones:
+            writer.writerow([t["id"], t["fecha"], t["texto"], t["predicciones_json"] or ""])
+    return len(traducciones)
+
+
+def exportar_traducciones_txt(ruta_txt: str) -> int:
+    """Exporta las traducciones como reporte legible en archivo de texto plano."""
+    traducciones = obtener_todas_las_traducciones(limite=5000)
+    with open(ruta_txt, mode="w", encoding="utf-8") as f:
+        f.write("=" * 60 + "\n")
+        f.write("      REPORTE DE TRADUCCIÓN DE LENGUAJE DE SEÑAS\n")
+        f.write(f"      Generado: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
+        f.write("=" * 60 + "\n\n")
+        for t in traducciones:
+            f.write(f"[{t['fecha']}] (ID: {t['id']})\n")
+            f.write(f"  Texto: {t['texto']}\n\n")
+        f.write("-" * 60 + "\n")
+        f.write(f"Total de registros exportados: {len(traducciones)}\n")
+    return len(traducciones)
+

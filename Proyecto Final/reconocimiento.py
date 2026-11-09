@@ -190,13 +190,11 @@ class ReconocedorEnVivo:
 
     def ejecutar_bucle_vivo(self):
         """Bucle interactivo con máquina de estados, cooldown y panel multilínea."""
-        cap = cv2.VideoCapture(CAMARA_INDEX)
-        if not cap.isOpened():
-            print(f"[ERROR] No se pudo abrir la cámara {CAMARA_INDEX}.")
+        from utils import abrir_camara_robusta
+        cap, idx_usado = abrir_camara_robusta(CAMARA_INDEX, FRAME_ANCHO, FRAME_ALTO)
+        if cap is None or not cap.isOpened():
+            print(f"[ERROR] No se pudo abrir ninguna cámara disponible (intentado #{CAMARA_INDEX}).")
             return
-
-        cap.set(cv2.CAP_PROP_FRAME_WIDTH, FRAME_ANCHO)
-        cap.set(cv2.CAP_PROP_FRAME_HEIGHT, FRAME_ALTO)
 
         modo_canny = True
         nombre_ventana = "Reconocimiento y Traduccion de Lenguaje de Senas en Vivo"

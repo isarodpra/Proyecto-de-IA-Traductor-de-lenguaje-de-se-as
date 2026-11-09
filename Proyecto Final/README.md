@@ -18,13 +18,14 @@ Este proyecto implementa una solución de visión por computadora y deep learnin
 
 ```text
 proyecto_lenguaje_senas/
-├── main.py              # Punto de entrada y menú interactivo de consola
+├── main.py              # Punto de entrada (Lanza GUI o menú de consola con --cli)
+├── interfaz_gui.py      # Interfaz Gráfica Moderna en Tkinter (Dark Theme & 6 pestañas)
 ├── config.py            # Rutas relativas con pathlib, hiperparámetros y umbrales
 ├── db.py                # Base de datos SQLite (esquema, índices y consultas)
-├── landmarks.py         # Extractor unificado (MediaPipe / Fallback Haar) y panel Canny
+├── landmarks.py         # Extractor unificado (MediaPipe / Fallback Haar), CLAHE y Normalización
 ├── captura.py           # Captura en vivo para señas estáticas y dinámicas (train/val)
-├── entrenamiento.py     # Data augmentation, red LSTM Keras y exportación
-├── reconocimiento.py    # Inferencia en tiempo real, ventana doble y suavizado
+├── entrenamiento.py     # Data augmentation, red LSTM / Random Forest y exportación
+├── reconocimiento.py    # Inferencia en tiempo real, máquina de estados y suavizado
 ├── traduccion.py        # Mapeo a lenguaje natural, debounce y síntesis de voz
 ├── utils.py             # Medición de FPS, latencia y elementos gráficos HUD
 ├── etiquetas.json       # Mapeo de índices a clases de señas
@@ -34,7 +35,7 @@ proyecto_lenguaje_senas/
 │   ├── db/              # Base de datos SQLite (senas.db)
 │   ├── senas/           # Muestras estáticas (.jpg y landmarks .npy)
 │   └── secuencias/      # Muestras dinámicas (tensores .npy de 30 frames)
-└── modelos/             # Modelos entrenados (.keras)
+└── modelos/             # Modelos entrenados (.joblib / .keras)
 ```
 
 ---

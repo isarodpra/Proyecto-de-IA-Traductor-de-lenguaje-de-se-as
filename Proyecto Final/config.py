@@ -49,6 +49,12 @@ TIEMPO_AUTO_ESPACIO_SEGUNDOS = 4.0  # Pausa sin señas para insertar espacio o c
 UMBRAL_MOVIMIENTO_DINAMICO = 0.040  # Varianza/velocidad de landmarks para considerar movimiento activo
 UMBRAL_PRESENCIA_MANO = 0.05  # Magnitud mínima para considerar que hay una mano en pantalla
 
+# Filtros y mejoras avanzadas
+USAR_FILTRO_CLAHE = False          # False por defecto para máxima fluidez a 30-60 FPS (activable en Ajustes)
+NORMALIZAR_LANDMARKS = True        # Normalización relativa e invariante a escala/distancia
+VOZ_HABILITADA = True              # Síntesis de voz activa
+VELOCIDAD_VOZ_TTS = 150            # Palabras por minuto en el sintetizador
+
 # Modos de reconocimiento disponibles
 MODO_AUTO = "AUTO (HIBRIDO)"
 MODO_SOLO_ESTATICO = "SOLO ESTATICO"

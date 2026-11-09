@@ -3,15 +3,33 @@ Módulo Principal y Punto de Entrada de la Aplicación.
 Presenta el menú de consola interactivo y gestiona el ciclo de vida del sistema.
 """
 
+import os
 import sys
 import time
+import warnings
 from pathlib import Path
+
+# Suprimir logs verbosos de TensorFlow y advertencias de scikit-learn
+os.environ["TF_ENABLE_ONEDNN_OPTS"] = "0"
+os.environ["TF_CPP_MIN_LOG_LEVEL"] = "3"
+warnings.filterwarnings("ignore")
 
 import config
 import db
 from captura import iniciar_interfaz_captura, ejecutar_captura_en_vivo
 from entrenamiento import ejecutar_entrenamiento
 from reconocimiento import iniciar_reconocimiento
+
+
+def lanzar_gui():
+    """Lanza la interfaz gráfica de usuario en Tkinter."""
+    try:
+        from interfaz_gui import iniciar_interfaz_grafica
+        iniciar_interfaz_grafica()
+    except Exception as e:
+        print(f"[!] No se pudo iniciar la interfaz gráfica: {e}")
+        print("[*] Iniciando en modo consola alternativo...")
+        menu_principal()
 
 
 def capturar_pruebas():
@@ -95,15 +113,16 @@ def menu_principal():
         print("\n" + "=" * 48)
         print(" SISTEMA DE RECONOCIMIENTO DE LENGUAJE DE SEÑAS")
         print("=" * 48)
-        print(" 1. Registrar señas")
+        print(" 1. Registrar señas (Consola + OpenCV)")
         print(" 2. Entrenar modelo")
         print(" 3. Reconocer y traducir en vivo")
         print(" 4. Capturar pruebas")
         print(" 5. Ver estadísticas/registros")
+        print(" 6. 🚀 ABRIR INTERFAZ GRÁFICA (GUI TKINTER)")
         print(" 0. Salir")
         print("=" * 48)
 
-        opcion = input(">> Seleccione una opción [0-5]: ").strip()
+        opcion = input(">> Seleccione una opción [0-6]: ").strip()
 
         if opcion == "1":
             iniciar_interfaz_captura()
@@ -115,6 +134,8 @@ def menu_principal():
             capturar_pruebas()
         elif opcion == "5":
             mostrar_estadisticas_y_registros()
+        elif opcion == "6":
+            lanzar_gui()
         elif opcion == "0":
             print("\nCerrando el sistema. ¡Hasta pronto!\n")
             sys.exit(0)
@@ -123,4 +144,7 @@ def menu_principal():
 
 
 if __name__ == "__main__":
-    menu_principal()
+    if "--cli" in sys.argv:
+        menu_principal()
+    else:
+        lanzar_gui()

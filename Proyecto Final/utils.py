@@ -206,3 +206,71 @@ def dibujar_panel_traduccion_multilinea(
         cv2.putText(frame, l + cursor, (margen_x, y_linea),
                     fuente, fuente_escala, (255, 255, 255), 2, cv2.LINE_AA)
         y_linea += 24
+
+
+def abrir_camara_robusta(
+    indice_preferido: Optional[int] = None,
+    ancho: int = 640,
+    alto: int = 480
+) -> Tuple[Optional[cv2.VideoCapture], int]:
+    """
+    Abre la cámara web de forma robusta y optimizada:
+    1. Prioriza la cámara física (índice 0) o el índice preferido del usuario.
+    2. En Windows prueba DirectShow (CAP_DSHOW) y luego CAP_ANY.
+    3. Verifica que el dispositivo devuelva imagen real (evita cámaras virtuales negras como OMEN Cam).
+    4. Configura el buffer de captura a 1 frame (zero lag) para máxima fluidez en tiempo real.
+    Retorna (cap, indice_usado). Si ninguna cámara abre, retorna (None, -1).
+    """
+    import sys
+    indices_a_probar = []
+    if indice_preferido is not None:
+        indices_a_probar.append(int(indice_preferido))
+    for i in [0, 1, 2]:
+        if i not in indices_a_probar:
+            indices_a_probar.append(i)
+
+    backends = [cv2.CAP_DSHOW, cv2.CAP_ANY] if sys.platform.startswith("win") else [cv2.CAP_ANY]
+
+    candidato_fallback = None
+    idx_fallback = -1
+
+    for idx in indices_a_probar:
+        for backend in backends:
+            try:
+                cap = cv2.VideoCapture(idx, backend)
+                if cap.isOpened():
+                    cap.set(cv2.CAP_PROP_FRAME_WIDTH, ancho)
+                    cap.set(cv2.CAP_PROP_FRAME_HEIGHT, alto)
+                    try:
+                        cap.set(cv2.CAP_PROP_FPS, 30)
+                    except Exception:
+                        pass
+                    try:
+                        cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+                    except Exception:
+                        pass
+
+                    # Leer un frame de prueba
+                    ret, frame = cap.read()
+                    if ret and frame is not None:
+                        # Si tiene brillo real (no es pantalla negra de cámara virtual)
+                        if frame.mean() > 2.0:
+                            if candidato_fallback is not None:
+                                candidato_fallback.release()
+                            return cap, idx
+                        else:
+                            # Guardar como fallback por si no hay otra cámara
+                            if candidato_fallback is None:
+                                candidato_fallback = cap
+                                idx_fallback = idx
+                            else:
+                                cap.release()
+                            continue
+                cap.release()
+            except Exception:
+                pass
+
+    if candidato_fallback is not None and candidato_fallback.isOpened():
+        return candidato_fallback, idx_fallback
+
+    return None, -1

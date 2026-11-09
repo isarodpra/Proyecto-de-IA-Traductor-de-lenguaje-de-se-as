@@ -27,13 +27,21 @@ class MotorVozAsincrono:
         self._cola_texto: List[str] = []
         self._bloqueo = threading.Lock()
         self._activo = True
+        self._habilitado = True
+        self._velocidad = 150
 
         if self.disponible:
             self._hilo = threading.Thread(target=self._bucle_locucion, daemon=True)
             self._hilo.start()
 
+    def set_habilitado(self, habilitado: bool):
+        self._habilitado = habilitado
+
+    def set_velocidad(self, velocidad: int):
+        self._velocidad = max(80, min(300, int(velocidad)))
+
     def hablar(self, texto: str):
-        if not self.disponible or not texto.strip():
+        if not self.disponible or not self._habilitado or not texto.strip():
             return
         with self._bloqueo:
             self._cola_texto.append(texto.strip())
@@ -41,16 +49,21 @@ class MotorVozAsincrono:
     def _bucle_locucion(self):
         try:
             engine = pyttsx3.init()
-            engine.setProperty('rate', 150)  # Velocidad natural
             while self._activo:
                 texto_a_decir = None
                 with self._bloqueo:
-                    if self._cola_texto:
+                    if self._cola_texto and self._habilitado:
                         texto_a_decir = self._cola_texto.pop(0)
+                    elif self._cola_texto and not self._habilitado:
+                        self._cola_texto.clear()
 
                 if texto_a_decir:
-                    engine.say(texto_a_decir)
-                    engine.runAndWait()
+                    try:
+                        engine.setProperty('rate', self._velocidad)
+                        engine.say(texto_a_decir)
+                        engine.runAndWait()
+                    except Exception:
+                        pass
                 else:
                     time.sleep(0.08)
         except Exception:

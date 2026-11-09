@@ -87,14 +87,12 @@ def _capturar_nueva_sena():
 
 def ejecutar_captura_en_vivo(sena_id: int, nombre_sena: str, tipo_sena: str):
     """Abre la cámara y gestiona la captura visual interactiva."""
-    cap = cv2.VideoCapture(CAMARA_INDEX)
-    if not cap.isOpened():
-        print(f"[ERROR] No se pudo abrir la cámara en el índice {CAMARA_INDEX}.")
+    from utils import abrir_camara_robusta
+    cap, idx_usado = abrir_camara_robusta(CAMARA_INDEX, FRAME_ANCHO, FRAME_ALTO)
+    if cap is None or not cap.isOpened():
+        print(f"[ERROR] No se pudo abrir ninguna cámara disponible (intentado #{CAMARA_INDEX}).")
         print("Verifique que la cámara esté conectada y no esté en uso por otra app.")
         return
-
-    cap.set(cv2.CAP_PROP_FRAME_WIDTH, FRAME_ANCHO)
-    cap.set(cv2.CAP_PROP_FRAME_HEIGHT, FRAME_ALTO)
 
     extractor = ExtractorLandmarks()
 
