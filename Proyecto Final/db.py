@@ -7,8 +7,9 @@ import sqlite3
 import json
 from datetime import datetime
 from pathlib import Path
-from typing import Optional, List, Dict, Any, Tuple
-from config import RUTA_DB
+from typing import Optional, List, Dict, Any, Tuple, Union
+import shutil
+from config import RUTA_DB, DIR_SENAS, DIR_SECUENCIAS
 
 
 def get_db_connection() -> sqlite3.Connection:
@@ -212,6 +213,79 @@ def eliminar_ultima_muestra(sena_id: int) -> Optional[str]:
             return muestra["ruta_landmarks"]
 
     return None
+
+
+def eliminar_sena_completa(identificador: Union[int, str]) -> Tuple[bool, str, int]:
+    """
+    Elimina por completo una seña, todas sus muestras/secuencias registradas
+    y sus archivos físicos en disco (imágenes .jpg y landmarks .npy).
+    Retorna (éxito, mensaje, cantidad_archivos_eliminados).
+    """
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        if isinstance(identificador, int) or (isinstance(identificador, str) and str(identificador).isdigit()):
+            cursor.execute("SELECT * FROM senas WHERE id = ?", (int(identificador),))
+        else:
+            nombre_norm = str(identificador).strip().upper()
+            cursor.execute("SELECT * FROM senas WHERE nombre = ?", (nombre_norm,))
+
+        fila_sena = cursor.fetchone()
+        if not fila_sena:
+            return False, f"No se encontró la seña '{identificador}' en la base de datos.", 0
+
+        sena_id = fila_sena["id"]
+        nombre_sena = fila_sena["nombre"]
+
+        # 1. Obtener todas las rutas de archivos de muestras estáticas
+        cursor.execute("SELECT ruta_imagen, ruta_landmarks FROM muestras WHERE sena_id = ?", (sena_id,))
+        muestras = cursor.fetchall()
+
+        # 2. Obtener todas las rutas de archivos de secuencias dinámicas
+        cursor.execute("SELECT ruta_npy FROM secuencias WHERE sena_id = ?", (sena_id,))
+        secuencias = cursor.fetchall()
+
+        archivos_borrados = 0
+        # Borrar archivos individuales de muestras
+        for m in muestras:
+            for clave_ruta in ["ruta_imagen", "ruta_landmarks"]:
+                r = m[clave_ruta]
+                if r:
+                    try:
+                        p = Path(r)
+                        if p.exists() and p.is_file():
+                            p.unlink()
+                            archivos_borrados += 1
+                    except Exception:
+                        pass
+
+        # Borrar archivos individuales de secuencias
+        for s in secuencias:
+            r = s["ruta_npy"]
+            if r:
+                try:
+                    p = Path(r)
+                    if p.exists() and p.is_file():
+                        p.unlink()
+                        archivos_borrados += 1
+                except Exception:
+                    pass
+
+        # Borrar carpetas físicas completas en datos/senas/<NOMBRE> y datos/secuencias/<NOMBRE>
+        for dir_base in [DIR_SENAS, DIR_SECUENCIAS]:
+            carpeta_sena = dir_base / nombre_sena
+            if carpeta_sena.exists() and carpeta_sena.is_dir():
+                try:
+                    shutil.rmtree(carpeta_sena, ignore_errors=True)
+                except Exception:
+                    pass
+
+        # 3. Eliminar de la base de datos
+        cursor.execute("DELETE FROM muestras WHERE sena_id = ?", (sena_id,))
+        cursor.execute("DELETE FROM secuencias WHERE sena_id = ?", (sena_id,))
+        cursor.execute("DELETE FROM senas WHERE id = ?", (sena_id,))
+        conn.commit()
+
+        return True, f"Seña '{nombre_sena}' eliminada exitosamente junto con sus archivos.", archivos_borrados
 
 
 def guardar_traduccion(texto: str, predicciones: Optional[List[Dict[str, Any]]] = None) -> int:

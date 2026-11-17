@@ -104,6 +104,46 @@ def mostrar_estadisticas_y_registros():
     print("=" * 60)
 
 
+def eliminar_sena_consola():
+    """Permite buscar y eliminar una seña errónea del sistema desde la consola."""
+    print("\n" + "=" * 55)
+    print("      ELIMINACIÓN DE SEÑA ERRÓNEA DEL CATÁLOGO")
+    print("=" * 55)
+
+    senas = db.obtener_todas_las_senas()
+    if not senas:
+        print("[!] No hay señas registradas en la base de datos.")
+        return
+
+    print("\nSeñas registradas:")
+    for idx, s in enumerate(senas, 1):
+        conteos = db.obtener_conteo_muestras_por_sena(s["id"])
+        print(f"  {idx}. {s['nombre']:<12} | Tipo: {s['tipo']:<9} | Total muestras: {conteos['total']}")
+
+    elec = input("\n>> Ingrese el número de la seña a eliminar (o 0 para cancelar): ").strip()
+    if elec == "0":
+        print("[*] Cancelado.")
+        return
+
+    try:
+        num = int(elec)
+        if 1 <= num <= len(senas):
+            sena_sel = senas[num - 1]
+            confirm = input(f"\n>> ¿Está seguro de eliminar permanentemente '{sena_sel['nombre']}' y todos sus archivos? [s/N]: ").strip().lower()
+            if confirm in ["s", "si", "y", "yes"]:
+                exito, msg, n = db.eliminar_sena_completa(sena_sel["id"])
+                if exito:
+                    print(f"\n[OK] {msg} ({n} archivos borrados en disco).")
+                else:
+                    print(f"\n[!] Error: {msg}")
+            else:
+                print("\n[*] Operación cancelada.")
+        else:
+            print("\n[!] Número fuera de rango.")
+    except ValueError:
+        print("\n[!] Entrada no válida.")
+
+
 def menu_principal():
     """Bucle principal de la interfaz de consola."""
     # Inicialización de la base de datos al arranque
@@ -119,10 +159,11 @@ def menu_principal():
         print(" 4. Capturar pruebas")
         print(" 5. Ver estadísticas/registros")
         print(" 6. 🚀 ABRIR INTERFAZ GRÁFICA (GUI TKINTER)")
+        print(" 7. 🗑️  Eliminar seña errónea del catálogo")
         print(" 0. Salir")
         print("=" * 48)
 
-        opcion = input(">> Seleccione una opción [0-6]: ").strip()
+        opcion = input(">> Seleccione una opción [0-7]: ").strip()
 
         if opcion == "1":
             iniciar_interfaz_captura()
@@ -136,6 +177,8 @@ def menu_principal():
             mostrar_estadisticas_y_registros()
         elif opcion == "6":
             lanzar_gui()
+        elif opcion == "7":
+            eliminar_sena_consola()
         elif opcion == "0":
             print("\nCerrando el sistema. ¡Hasta pronto!\n")
             sys.exit(0)

@@ -1,5 +1,6 @@
 {
   "estaticas": [
+    "_REPOSO",
     "A",
     "B"
   ],
@@ -8,15 +9,17 @@
     "HOLA"
   ],
   "tipo_por_clase": {
+    "_REPOSO": "estatica",
     "A": "estatica",
     "B": "estatica",
     "_NO_GESTO": "dinamica",
     "HOLA": "dinamica"
   },
   "todas": {
-    "0": "A",
-    "1": "B",
-    "2": "_NO_GESTO",
-    "3": "HOLA"
+    "0": "_REPOSO",
+    "1": "A",
+    "2": "B",
+    "3": "_NO_GESTO",
+    "4": "HOLA"
   }
 }

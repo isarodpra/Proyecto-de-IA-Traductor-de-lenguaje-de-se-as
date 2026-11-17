@@ -25,9 +25,11 @@ from config import (
     MIN_MUESTRAS_POR_CLASE,
     BATCH_SIZE,
     EPOCHS,
-    LEARNING_RATE
+    LEARNING_RATE,
+    NORMALIZAR_LANDMARKS
 )
 import db
+from landmarks import normalizar_vector_landmarks
 
 # Soporte scikit-learn
 HAY_SKLEARN = False
@@ -35,6 +37,7 @@ try:
     from sklearn.ensemble import RandomForestClassifier
     from sklearn.neural_network import MLPClassifier
     from sklearn.metrics import accuracy_score
+    from sklearn.model_selection import train_test_split
     HAY_SKLEARN = True
 except (ImportError, Exception):
     HAY_SKLEARN = False
@@ -53,17 +56,18 @@ RUTA_MODELO_JOBLIB = DIR_MODELOS / "modelo_senas_hibrido.joblib"
 
 
 def aumentar_muestra_estatica(muestra: np.ndarray) -> np.ndarray:
-    """Aplica Data Augmentation a un vector individual de landmarks (ruido, escala y traslación)."""
+    """Aplica Data Augmentation a un vector individual de landmarks anatómicos sin crear manos fantasmas."""
     m = muestra.copy()
-    # Ruido gaussiano
-    m += np.random.normal(0, 0.012, m.shape).astype(np.float32)
-    # Escala
-    escala = np.random.uniform(0.95, 1.05)
-    m *= escala
-    # Traslación X, Y
-    m[0::3] += np.random.uniform(-0.02, 0.02)
-    m[1::3] += np.random.uniform(-0.02, 0.02)
-    return np.clip(m, -2.0, 2.0)
+    for ini, fin in [(0, 63), (63, 126), (126, TOTAL_CARACTERISTICAS)]:
+        sub = m[ini:fin]
+        if np.any(sub != 0):
+            sub += np.random.normal(0, 0.010, sub.shape).astype(np.float32)
+            escala = np.random.uniform(0.96, 1.04)
+            sub *= escala
+            sub[0::3] += np.random.uniform(-0.015, 0.015)
+            sub[1::3] += np.random.uniform(-0.015, 0.015)
+            m[ini:fin] = sub
+    return np.clip(m, -2.5, 2.5)
 
 
 def extraer_caracteristicas_dinamicas(secuencia: np.ndarray) -> np.ndarray:
@@ -97,13 +101,17 @@ def extraer_caracteristicas_dinamicas(secuencia: np.ndarray) -> np.ndarray:
 
 
 def aumentar_secuencia_dinamica(secuencia: np.ndarray) -> np.ndarray:
-    """Aumenta secuencias dinámicas aplicando ruido y deformaciones temporales leves."""
+    """Aumenta secuencias dinámicas aplicando ruido y deformaciones temporales sin alterar manos ausentes."""
     sec = secuencia.copy()
-    sec += np.random.normal(0, 0.015, sec.shape).astype(np.float32)
-    sec *= np.random.uniform(0.93, 1.07)
-    sec[:, 0::3] += np.random.uniform(-0.025, 0.025)
-    sec[:, 1::3] += np.random.uniform(-0.025, 0.025)
-    return np.clip(sec, -2.0, 2.0)
+    for ini, fin in [(0, 63), (63, 126), (126, TOTAL_CARACTERISTICAS)]:
+        sub = sec[:, ini:fin]
+        if np.any(sub != 0):
+            sub += np.random.normal(0, 0.012, sub.shape).astype(np.float32)
+            sub *= np.random.uniform(0.95, 1.05)
+            sub[:, 0::3] += np.random.uniform(-0.02, 0.02)
+            sub[:, 1::3] += np.random.uniform(-0.02, 0.02)
+            sec[:, ini:fin] = sub
+    return np.clip(sec, -2.5, 2.5)
 
 
 def cargar_datos_clasificados() -> Dict[str, Any]:
@@ -126,6 +134,8 @@ def cargar_datos_clasificados() -> Dict[str, Any]:
             for f in list(dir_train.glob("lm_*.npy")) + list(dir_val.glob("lm_*.npy")):
                 arr = np.load(str(f))
                 if arr.shape[0] == TOTAL_CARACTERISTICAS:
+                    if NORMALIZAR_LANDMARKS:
+                        arr = normalizar_vector_landmarks(arr)
                     muestras.append(arr)
 
             if len(muestras) >= MIN_MUESTRAS_POR_CLASE:
@@ -140,6 +150,8 @@ def cargar_datos_clasificados() -> Dict[str, Any]:
             for f in list(dir_train.glob("*.npy")) + list(dir_val.glob("*.npy")):
                 arr = np.load(str(f))
                 if arr.shape == (FRAMES_POR_SECUENCIA, TOTAL_CARACTERISTICAS):
+                    if NORMALIZAR_LANDMARKS:
+                        arr = np.array([normalizar_vector_landmarks(f_v) for f_v in arr], dtype=np.float32)
                     secuencias.append(arr)
 
             if len(secuencias) >= MIN_MUESTRAS_POR_CLASE:
@@ -161,98 +173,146 @@ def cargar_datos_clasificados() -> Dict[str, Any]:
 
 
 def entrenar_modelo_estatico(datos_estaticas: Dict[str, List[np.ndarray]]) -> Tuple[Any, List[str], float]:
-    """Entrena clasificador de alta precisión para señas estáticas (1 frame)."""
-    clases = sorted(list(datos_estaticas.keys()))
-    X, y = [], []
+    """Entrena clasificador de señas estáticas con división train/test real y control de reposo."""
+    clases_reales = sorted(list(datos_estaticas.keys()))
+    clases = list(clases_reales)
 
-    for idx, nombre in enumerate(clases):
-        muestras = datos_estaticas[nombre]
-        for m in muestras:
-            X.append(m)
-            y.append(idx)
-            # Data Augmentation (generar 3 variantes por muestra)
-            for _ in range(3):
-                X.append(aumentar_muestra_estatica(m))
-                y.append(idx)
+    # Agregar clase de control negativo si hay pocas clases para evitar 100% de falsos positivos
+    agregar_control_negativo = len(clases_reales) <= 2
+    if agregar_control_negativo and "_REPOSO" not in clases:
+        clases.insert(0, "_REPOSO")
 
-    X_arr = np.array(X, dtype=np.float32)
-    y_arr = np.array(y, dtype=np.int32)
+    X_raw, y_raw = [], []
+    for nombre in clases_reales:
+        idx = clases.index(nombre)
+        for m in datos_estaticas[nombre]:
+            X_raw.append(m)
+            y_raw.append(idx)
 
-    # Entrenar modelo
+    # Si se requiere control negativo, generar ejemplos sintéticos de reposo/sin manos
+    if agregar_control_negativo:
+        idx_reposo = clases.index("_REPOSO")
+        for _ in range(16):
+            m_cero = np.zeros(TOTAL_CARACTERISTICAS, dtype=np.float32)
+            # Agregar leve ruido en pose corporal
+            m_cero[126:] = np.random.normal(0.5, 0.05, TOTAL_CARACTERISTICAS - 126)
+            X_raw.append(m_cero)
+            y_raw.append(idx_reposo)
+
+    X_raw = np.array(X_raw, dtype=np.float32)
+    y_raw = np.array(y_raw, dtype=np.int32)
+
+    # Separar en conjunto de entrenamiento y prueba (80/20) para evaluación real
+    if HAY_SKLEARN and len(X_raw) >= 10:
+        try:
+            X_tr_raw, X_te, y_tr_raw, y_te = train_test_split(
+                X_raw, y_raw, test_size=0.20, random_state=42, stratify=y_raw
+            )
+        except Exception:
+            X_tr_raw, X_te, y_tr_raw, y_te = train_test_split(
+                X_raw, y_raw, test_size=0.20, random_state=42
+            )
+    else:
+        X_tr_raw, X_te, y_tr_raw, y_te = X_raw, X_raw, y_raw, y_raw
+
+    # Aumentar SOLO el conjunto de entrenamiento
+    X_train, y_train = [], []
+    for x_i, y_i in zip(X_tr_raw, y_tr_raw):
+        X_train.append(x_i)
+        y_train.append(y_i)
+        for _ in range(3):
+            X_train.append(aumentar_muestra_estatica(x_i))
+            y_train.append(y_i)
+
+    X_train_arr = np.array(X_train, dtype=np.float32)
+    y_train_arr = np.array(y_train, dtype=np.int32)
+
     if HAY_SKLEARN:
         modelo = RandomForestClassifier(n_estimators=120, max_depth=16, random_state=42)
-        modelo.fit(X_arr, y_arr)
-        preds = modelo.predict(X_arr)
-        acc = float(accuracy_score(y_arr, preds))
+        modelo.fit(X_train_arr, y_train_arr)
+        preds_test = modelo.predict(X_te)
+        acc = float(accuracy_score(y_te, preds_test))
     else:
-        # Fallback de centroides
         modelo = ClasificadorCentroides()
-        modelo.fit(X_arr, y_arr, clases)
+        modelo.fit(X_train_arr, y_train_arr, clases)
         acc = 0.90
 
     return modelo, clases, acc
 
 
 def entrenar_modelo_dinamico(datos_dinamicas: Dict[str, List[np.ndarray]]) -> Tuple[Any, List[str], float]:
-    """
-    Entrena clasificador para señas dinámicas evaluando trayectoria cinemática.
-    Si solo hay una seña registrada (ej. HOLA), incluye ejemplos de control negativo
-    (_NO_GESTO / reposo / movimiento aleatorio) para evitar falsos positivos con el rostro.
-    """
+    """Entrena clasificador para señas dinámicas evaluando trayectoria cinemática con train/test split."""
     clases_reales = sorted(list(datos_dinamicas.keys()))
     clases = list(clases_reales)
 
-    # Si hay una sola clase dinámica, agregar clase negativa de control
-    agregar_control_negativo = len(clases_reales) == 1
-    if agregar_control_negativo:
+    agregar_control_negativo = len(clases_reales) <= 2
+    if agregar_control_negativo and "_NO_GESTO" not in clases:
         clases.insert(0, "_NO_GESTO")
 
-    X_features, y = [], []
+    X_features_raw, y_raw = [], []
 
-    # 1. Agregar muestras reales
+    # 1. Extraer features de secuencias reales
     for nombre in clases_reales:
         idx = clases.index(nombre)
         secuencias = datos_dinamicas[nombre]
         for sec in secuencias:
             feat = extraer_caracteristicas_dinamicas(sec)
-            X_features.append(feat)
-            y.append(idx)
-            # Data Augmentation (generar variantes con ruido y escala)
-            for _ in range(3):
-                sec_aug = aumentar_secuencia_dinamica(sec)
-                X_features.append(extraer_caracteristicas_dinamicas(sec_aug))
-                y.append(idx)
+            X_features_raw.append(feat)
+            y_raw.append(idx)
 
-    # 2. Si se requiere control negativo, generar ejemplos sintéticos de reposo y movimientos neutros
+    # 2. Control negativo sintético
     if agregar_control_negativo:
         idx_no_gesto = clases.index("_NO_GESTO")
-        # a) Secuencias con manos completamente quietas o ceros
-        for _ in range(12):
+        for _ in range(15):
             sec_quieta = np.zeros((FRAMES_POR_SECUENCIA, TOTAL_CARACTERISTICAS), dtype=np.float32)
-            # Agregar una leve pose fija simulada
             sec_quieta[:, 126:] = np.random.normal(0.5, 0.05, (FRAMES_POR_SECUENCIA, TOTAL_CARACTERISTICAS - 126))
-            X_features.append(extraer_caracteristicas_dinamicas(sec_quieta))
-            y.append(idx_no_gesto)
+            X_features_raw.append(extraer_caracteristicas_dinamicas(sec_quieta))
+            y_raw.append(idx_no_gesto)
 
-        # b) Secuencias con manos estáticas en una posición fija (simulando letras o mano quieta)
-        for _ in range(12):
+        for _ in range(15):
             punto_fijo = np.random.uniform(0.3, 0.7, TOTAL_CARACTERISTICAS).astype(np.float32)
             sec_fija = np.tile(punto_fijo, (FRAMES_POR_SECUENCIA, 1))
             sec_fija += np.random.normal(0, 0.003, sec_fija.shape).astype(np.float32)
-            X_features.append(extraer_caracteristicas_dinamicas(sec_fija))
-            y.append(idx_no_gesto)
+            X_features_raw.append(extraer_caracteristicas_dinamicas(sec_fija))
+            y_raw.append(idx_no_gesto)
 
-    X_arr = np.array(X_features, dtype=np.float32)
-    y_arr = np.array(y, dtype=np.int32)
+    X_raw_arr = np.array(X_features_raw, dtype=np.float32)
+    y_raw_arr = np.array(y_raw, dtype=np.int32)
+
+    # Train / Test split
+    if HAY_SKLEARN and len(X_raw_arr) >= 10:
+        try:
+            X_tr, X_te, y_tr, y_te = train_test_split(
+                X_raw_arr, y_raw_arr, test_size=0.20, random_state=42, stratify=y_raw_arr
+            )
+        except Exception:
+            X_tr, X_te, y_tr, y_te = train_test_split(
+                X_raw_arr, y_raw_arr, test_size=0.20, random_state=42
+            )
+    else:
+        X_tr, X_te, y_tr, y_te = X_raw_arr, X_raw_arr, y_raw_arr, y_raw_arr
+
+    # Aumento solo en entrenamiento
+    X_train, y_train = [], []
+    for x_i, y_i in zip(X_tr, y_tr):
+        X_train.append(x_i)
+        y_train.append(y_i)
+        for _ in range(3):
+            x_aug = x_i + np.random.normal(0, 0.010, x_i.shape).astype(np.float32)
+            X_train.append(x_aug)
+            y_train.append(y_i)
+
+    X_train_arr = np.array(X_train, dtype=np.float32)
+    y_train_arr = np.array(y_train, dtype=np.int32)
 
     if HAY_SKLEARN:
         modelo = RandomForestClassifier(n_estimators=120, max_depth=14, random_state=42)
-        modelo.fit(X_arr, y_arr)
-        preds = modelo.predict(X_arr)
-        acc = float(accuracy_score(y_arr, preds))
+        modelo.fit(X_train_arr, y_train_arr)
+        preds = modelo.predict(X_te)
+        acc = float(accuracy_score(y_te, preds))
     else:
         modelo = ClasificadorCentroides()
-        modelo.fit(X_arr, y_arr, clases)
+        modelo.fit(X_train_arr, y_train_arr, clases)
         acc = 0.88
 
     return modelo, clases, acc

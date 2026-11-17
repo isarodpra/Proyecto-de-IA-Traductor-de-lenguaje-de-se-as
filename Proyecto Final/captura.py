@@ -40,6 +40,7 @@ def iniciar_interfaz_captura():
         print("\nOpciones disponibles:")
         print("  [1-{}] Seleccionar seña existente para agregar muestras".format(len(senas_existentes)))
         print("  [N]   Registrar una NUEVA seña")
+        print("  [E]   Eliminar una seña y todas sus muestras (por error)")
         print("  [0]   Regresar al menú principal")
 
         eleccion = input("\n>> Ingrese su opción: ").strip()
@@ -49,6 +50,8 @@ def iniciar_interfaz_captura():
         elif eleccion.upper() == "N":
             # Proceder a registrar nueva
             _capturar_nueva_sena()
+        elif eleccion.upper() == "E":
+            _eliminar_sena_interactivo(senas_existentes)
         else:
             try:
                 num = int(eleccion)
@@ -63,6 +66,39 @@ def iniciar_interfaz_captura():
     else:
         print("\nNo hay señas registradas aún. Registraremos la primera.")
         _capturar_nueva_sena()
+
+
+def _eliminar_sena_interactivo(senas_existentes):
+    """Permite seleccionar y eliminar permanentemente una seña errónea."""
+    print("\n" + "-" * 55)
+    print("       ELIMINACIÓN DE SEÑA POR ERROR O EQUIVOCACIÓN")
+    print("-" * 55)
+    for idx, s in enumerate(senas_existentes, 1):
+        conteos = db.obtener_conteo_muestras_por_sena(s["id"])
+        print(f"  {idx}. {s['nombre']:<12} | Tipo: {s['tipo']:<9} | Total muestras: {conteos['total']}")
+
+    elec = input("\n>> Ingrese el número de la seña que desea eliminar (o 0 para cancelar): ").strip()
+    if elec == "0":
+        print("[*] Operación cancelada.")
+        return
+
+    try:
+        num = int(elec)
+        if 1 <= num <= len(senas_existentes):
+            sena_sel = senas_existentes[num - 1]
+            confirm = input(f"\n>> ¿Está seguro de eliminar '{sena_sel['nombre']}' y TODAS sus muestras? [s/N]: ").strip().lower()
+            if confirm in ["s", "si", "y", "yes"]:
+                exito, msg, n = db.eliminar_sena_completa(sena_sel["id"])
+                if exito:
+                    print(f"\n[OK] {msg} ({n} archivos borrados en disco).")
+                else:
+                    print(f"\n[!] Error: {msg}")
+            else:
+                print("\n[*] Operación cancelada.")
+        else:
+            print("\n[!] Número de seña inválido.")
+    except ValueError:
+        print("\n[!] Entrada no válida.")
 
 
 def _capturar_nueva_sena():

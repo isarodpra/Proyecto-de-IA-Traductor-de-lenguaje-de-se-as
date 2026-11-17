@@ -1,14 +1,18 @@
 """
 Módulo de Extracción de Landmarks y Procesamiento Visual.
-Soporta MediaPipe (Holistic / Hands / Pose) con fallback automático basado en
-OpenCV Haar Cascades y análisis de contornos normalizados para garantizar funcionamiento offline.
-Genera además vistas complementarias (filtro Canny o renderizado de esqueleto).
+Utiliza MediaPipe Tasks (HandLandmarker y PoseLandmarker) con modelos locales
+optimizados en 'modelos/' para detección articular precisa (21 puntos por mano, 33 de pose).
+Incluye normalización relativa invariante a distancia y herramientas de dibujo sobre video.
 """
+
+import sys
+import os
+from pathlib import Path
+from typing import Tuple, Dict, Any, Optional, List
 
 import cv2
 import numpy as np
-from pathlib import Path
-from typing import Tuple, Dict, Any, Optional
+
 from config import (
     TOTAL_CARACTERISTICAS,
     CANTIDAD_LANDMARKS_MANO,
@@ -17,24 +21,42 @@ from config import (
     FRAME_ALTO,
     USAR_FILTRO_CLAHE,
     NORMALIZAR_LANDMARKS,
-    DIR_HAAR_CASCADES
+    DIR_MODELOS
 )
 
-# Intentar importar MediaPipe
-HAY_MEDIAPIPE = False
+# Intentar importar MediaPipe Tasks
+HAY_MEDIAPIPE_TASKS = False
 try:
     import mediapipe as mp
-    HAY_MEDIAPIPE = hasattr(mp, "solutions") and hasattr(mp.solutions, "holistic")
-except (ImportError, Exception):
-    HAY_MEDIAPIPE = False
+    from mediapipe.tasks import python
+    from mediapipe.tasks.python import vision
+    HAY_MEDIAPIPE_TASKS = hasattr(mp, "tasks") and hasattr(mp.tasks, "vision")
+except Exception:
+    HAY_MEDIAPIPE_TASKS = False
+
+# Conexiones estándar de las 21 articulaciones de la mano
+CONEXIONES_MANO = [
+    (0, 1), (1, 2), (2, 3), (3, 4),        # Pulgar
+    (0, 5), (5, 6), (6, 7), (7, 8),        # Índice
+    (5, 9), (9, 10), (10, 11), (11, 12),   # Medio
+    (9, 13), (13, 14), (14, 15), (15, 16), # Anular
+    (13, 17), (0, 17), (17, 18), (18, 19), (19, 20) # Meñique y palma
+]
+
+# Conexiones de pose corporal esencial (hombros, brazos y torso)
+CONEXIONES_POSE = [
+    (11, 12),               # Hombro a hombro
+    (11, 13), (13, 15),     # Brazo izquierdo
+    (12, 14), (14, 16),     # Brazo derecho
+    (11, 23), (12, 24),     # Hombros a cadera
+    (23, 24)                # Cadera
+]
 
 _CLAHE_CACHE = None
 
+
 def aplicar_filtro_clahe(frame_bgr: np.ndarray, clip_limit: float = 2.0, grid_size: Tuple[int, int] = (8, 8)) -> np.ndarray:
-    """
-    Mejora adaptativa de contraste local (CLAHE) en el espacio LAB con caché de instancia.
-    Compensa iluminación deficiente sin ralentizar el pipeline visual.
-    """
+    """Mejora adaptativa de contraste local en el espacio LAB para baja iluminación."""
     global _CLAHE_CACHE
     try:
         lab = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2LAB)
@@ -50,10 +72,10 @@ def aplicar_filtro_clahe(frame_bgr: np.ndarray, clip_limit: float = 2.0, grid_si
 
 def normalizar_puntos_mano(mano_flat: np.ndarray) -> np.ndarray:
     """
-    Normaliza los 21 puntos clave 3D de una mano (vector 63):
+    Normaliza los 21 puntos clave 3D de una mano (vector de 63 floats):
     1. Centra la muñeca (landmark 0) en (0, 0, 0).
-    2. Escala por la longitud de la palma (distancia euclidiana entre muñeca lm 0 y nudillo lm 9).
-    Esto hace el vector invariante a distancia a la cámara y posición en el cuadro.
+    2. Escala por la longitud de la palma (distancia muñeca a base del dedo medio lm 9).
+    Hace el vector invariante a distancia y posición en la pantalla.
     """
     if len(mano_flat) < 63 or np.all(mano_flat == 0):
         return np.zeros(63, dtype=np.float32)
@@ -62,7 +84,6 @@ def normalizar_puntos_mano(mano_flat: np.ndarray) -> np.ndarray:
     muñeca = pts[0, :].copy()
     pts_centrados = pts - muñeca
 
-    # Distancia muñeca a base del dedo medio (landmark 9)
     dist_escala = np.linalg.norm(pts_centrados[9, :])
     if dist_escala > 1e-4:
         pts_centrados = pts_centrados / dist_escala
@@ -71,10 +92,7 @@ def normalizar_puntos_mano(mano_flat: np.ndarray) -> np.ndarray:
 
 
 def normalizar_vector_landmarks(vector_completo: np.ndarray) -> np.ndarray:
-    """
-    Aplica normalización espacial relativa e invariante a las manos en el vector de 225 características.
-    Conserva compatibilidad total con la dimensionalidad TOTAL_CARACTERISTICAS.
-    """
+    """Normaliza las manos izquierda y derecha dentro del vector de 225 características."""
     if len(vector_completo) != TOTAL_CARACTERISTICAS:
         return vector_completo
 
@@ -91,12 +109,9 @@ def normalizar_vector_landmarks(vector_completo: np.ndarray) -> np.ndarray:
 
 
 def validar_calidad_landmarks(vector: np.ndarray, tipo: str = "estatica") -> Tuple[bool, str]:
-    """
-    Evalúa la calidad visual y completitud de los landmarks antes de guardar o clasificar.
-    Retorna (es_valido, mensaje_diagnostico).
-    """
+    """Evalúa que haya al menos una mano detectada de forma nítida dentro de encuadre."""
     if vector is None or len(vector) < 126:
-        return False, "Vector de landmarks vacío o incompleto"
+        return False, "Sin detección de manos"
 
     mano_izq = vector[:63]
     mano_der = vector[63:126]
@@ -104,202 +119,137 @@ def validar_calidad_landmarks(vector: np.ndarray, tipo: str = "estatica") -> Tup
     hay_der = bool(np.any(mano_der != 0))
 
     if not hay_izq and not hay_der:
-        return False, "No se detectaron manos en el encuadre"
+        return False, "Muestre su mano claramente frente a la cámara"
 
-    for mano, nombre in [(mano_izq, "izquierda"), (mano_der, "derecha")]:
-        if np.any(mano != 0):
-            pts = mano.reshape(-1, 3)
-            xs, ys = pts[:, 0], pts[:, 1]
-            if np.min(xs) < -0.15 or np.max(xs) > 1.15 or np.min(ys) < -0.15 or np.max(ys) > 1.15:
-                return False, f"La mano {nombre} está parcialmente fuera del encuadre"
-
-    return True, "Muestra con excelente calidad de landmarks"
+    return True, "Excelente detección articular"
 
 
 class ExtractorLandmarks:
-    """Clase unificada para extracción de puntos clave corporales y de manos."""
+    """Extractor moderno de puntos clave utilizando MediaPipe Tasks (Hands & Pose)."""
 
     def __init__(self, usar_mediapipe: bool = True, usar_clahe: bool = USAR_FILTRO_CLAHE):
-        self.usar_mediapipe = usar_mediapipe and HAY_MEDIAPIPE
-        self.modo_fallback = not self.usar_mediapipe
         self.usar_clahe = usar_clahe
+        self.usar_tasks = False
+        self.hand_detector = None
+        self.pose_detector = None
 
-        if self.usar_mediapipe:
-            self.mp_holistic = mp.solutions.holistic
-            self.mp_drawing = mp.solutions.drawing_utils
-            self.mp_drawing_styles = mp.solutions.drawing_styles
-            self.holistic = self.mp_holistic.Holistic(
-                static_image_mode=False,
-                model_complexity=0,
-                smooth_landmarks=True,
-                min_detection_confidence=0.5,
-                min_tracking_confidence=0.5
-            )
-        else:
-            # Fallback seguro: intentar cargar cascade frontal si existe en disco
-            self.face_cascade = None
-            for p in [
-                DIR_HAAR_CASCADES / "haarcascade_frontalface_default.xml",
-                Path(cv2.data.haarcascades) / "haarcascade_frontalface_default.xml"
-            ]:
-                if p.exists():
-                    c = cv2.CascadeClassifier(str(p))
-                    if not c.empty():
-                        self.face_cascade = c
-                        break
+        ruta_hand_task = DIR_MODELOS / "hand_landmarker.task"
+        ruta_pose_task = DIR_MODELOS / "pose_landmarker.task"
 
-    def procesar_frame(self, frame_bgr: np.ndarray, normalizar: bool = False) -> Tuple[np.ndarray, Any]:
-        """
-        Procesa el frame y devuelve:
-        - vector de características 1D de longitud fija (TOTAL_CARACTERISTICAS).
-        - objeto de resultados para dibujo posterior.
-        """
+        if usar_mediapipe and HAY_MEDIAPIPE_TASKS and ruta_hand_task.exists():
+            try:
+                base_options_hand = python.BaseOptions(model_asset_path=str(ruta_hand_task))
+                hand_options = vision.HandLandmarkerOptions(
+                    base_options=base_options_hand,
+                    num_hands=2,
+                    min_hand_detection_confidence=0.45,
+                    min_tracking_confidence=0.45
+                )
+                self.hand_detector = vision.HandLandmarker.create_from_options(hand_options)
+                self.usar_tasks = True
+
+                if ruta_pose_task.exists():
+                    try:
+                        base_options_pose = python.BaseOptions(model_asset_path=str(ruta_pose_task))
+                        pose_options = vision.PoseLandmarkerOptions(
+                            base_options=base_options_pose,
+                            min_pose_detection_confidence=0.45,
+                            min_tracking_confidence=0.45
+                        )
+                        self.pose_detector = vision.PoseLandmarker.create_from_options(pose_options)
+                    except Exception:
+                        self.pose_detector = None
+
+                print("[OK] MediaPipe Tasks (HandLandmarker) inicializado exitosamente.")
+            except Exception as e:
+                print(f"[!] Error inicializando MediaPipe Tasks: {e}")
+                self.usar_tasks = False
+
+        self.modo_fallback = not self.usar_tasks
+
+    def procesar_frame(self, frame_bgr: np.ndarray, normalizar: Optional[bool] = None) -> Tuple[np.ndarray, Any]:
+        """Procesa un fotograma y extrae el vector 225D junto con los metadatos de detección."""
+        if normalizar is None:
+            normalizar = NORMALIZAR_LANDMARKS
+
         frame_proc = aplicar_filtro_clahe(frame_bgr) if self.usar_clahe else frame_bgr
-        if self.usar_mediapipe:
-            vector, results = self._procesar_mediapipe(frame_proc)
+
+        if self.usar_tasks and self.hand_detector:
+            vector, results = self._procesar_mediapipe_tasks(frame_proc)
         else:
-            vector, results = self._procesar_fallback(frame_proc)
+            vector, results = self._procesar_neutro(frame_proc)
 
         if normalizar:
             vector = normalizar_vector_landmarks(vector)
 
         return vector, results
 
-    def _procesar_mediapipe(self, frame_bgr: np.ndarray) -> Tuple[np.ndarray, Any]:
+    def _procesar_mediapipe_tasks(self, frame_bgr: np.ndarray) -> Tuple[np.ndarray, Any]:
+        """Ejecuta inferencia neural de manos y pose sobre el frame."""
         frame_rgb = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
-        frame_rgb.flags.writeable = False
-        results = self.holistic.process(frame_rgb)
-        frame_rgb.flags.writeable = True
+        mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=frame_rgb)
 
-        # Extraer mano izquierda (21 landmarks * 3 = 63)
-        if results.left_hand_landmarks:
-            mano_izq = np.array(
-                [[lm.x, lm.y, lm.z] for lm in results.left_hand_landmarks.landmark]
-            ).flatten()
-        else:
-            mano_izq = np.zeros(CANTIDAD_LANDMARKS_MANO)
+        try:
+            hand_result = self.hand_detector.detect(mp_image)
+        except Exception:
+            hand_result = None
 
-        # Extraer mano derecha (21 landmarks * 3 = 63)
-        if results.right_hand_landmarks:
-            mano_der = np.array(
-                [[lm.x, lm.y, lm.z] for lm in results.right_hand_landmarks.landmark]
-            ).flatten()
-        else:
-            mano_der = np.zeros(CANTIDAD_LANDMARKS_MANO)
-
-        # Extraer puntos de pose corporal (33 landmarks * 3 = 99)
-        if results.pose_landmarks:
-            pose = np.array(
-                [[lm.x, lm.y, lm.z] for lm in results.pose_landmarks.landmark]
-            ).flatten()
-        else:
-            pose = np.zeros(CANTIDAD_LANDMARKS_POSE)
-
-        vector_completo = np.concatenate([mano_izq, mano_der, pose]).astype(np.float32)
-
-        # Asegurar longitud estricta
-        if len(vector_completo) != TOTAL_CARACTERISTICAS:
-            vector_completo = np.pad(
-                vector_completo,
-                (0, max(0, TOTAL_CARACTERISTICAS - len(vector_completo)))
-            )[:TOTAL_CARACTERISTICAS]
-
-        return vector_completo, results
-
-    def _procesar_fallback(self, frame_bgr: np.ndarray) -> Tuple[np.ndarray, Any]:
-        """
-        Fallback cuando MediaPipe no está instalado.
-        Detecta rostro y regiones de mano usando segmentación por tono de piel HSV y contornos.
-        Produce un vector normalizado de tamaño TOTAL_CARACTERISTICAS.
-        """
-        alto, ancho, _ = frame_bgr.shape
-        gris = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2GRAY)
-        hsv = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2HSV)
-
-        # Detección de rostro protegida
-        caras = []
-        if self.face_cascade is not None and not self.face_cascade.empty():
+        pose_result = None
+        if self.pose_detector:
             try:
-                caras = self.face_cascade.detectMultiScale(gris, scaleFactor=1.1, minNeighbors=5, minSize=(60, 60))
+                pose_result = self.pose_detector.detect(mp_image)
             except Exception:
-                caras = []
-        cara_box = caras[0] if len(caras) > 0 else None
+                pose_result = None
 
-        # Máscara de tono de piel en HSV
-        bajo_piel = np.array([0, 30, 60], dtype=np.uint8)
-        alto_piel = np.array([25, 255, 255], dtype=np.uint8)
-        mascara_piel = cv2.inRange(hsv, bajo_piel, alto_piel)
-        mascara_piel = cv2.GaussianBlur(mascara_piel, (5, 5), 0)
+        mano_izq = np.zeros(CANTIDAD_LANDMARKS_MANO, dtype=np.float32)
+        mano_der = np.zeros(CANTIDAD_LANDMARKS_MANO, dtype=np.float32)
+        pose_arr = np.zeros(CANTIDAD_LANDMARKS_POSE, dtype=np.float32)
 
-        # Si no hubo cascade, localizar el rostro como el contorno de piel superior central
-        if cara_box is None:
-            contornos_previos, _ = cv2.findContours(mascara_piel.copy(), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-            for c in contornos_previos:
-                if cv2.contourArea(c) > 600:
-                    bx, by, bw, bh = cv2.boundingRect(c)
-                    if by < alto * 0.55 and (bx + bw / 2) > ancho * 0.2 and (bx + bw / 2) < ancho * 0.8:
-                        cara_box = (bx, by, bw, bh)
-                        break
-
-        # Si hay cara detectada, enmascararla para buscar las manos fuera del rostro
-        if cara_box is not None:
-            fx, fy, fw, fh = cara_box
-            cv2.rectangle(mascara_piel, (fx, fy), (fx + fw, fy + fh), 0, -1)
-
-        contornos, _ = cv2.findContours(mascara_piel, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-        # Ordenar contornos por área descendente
-        contornos_validos = sorted([c for c in contornos if cv2.contourArea(c) > 400], key=cv2.contourArea, reverse=True)
-
-        features = []
-        # Normalizar datos de cara
-        if cara_box is not None:
-            features.extend([cara_box[0] / ancho, cara_box[1] / alto, cara_box[2] / ancho, cara_box[3] / alto])
-        else:
-            features.extend([0.0, 0.0, 0.0, 0.0])
-
-        # Extraer puntos característicos de los 2 mayores contornos (manos)
-        for i in range(2):
-            if i < len(contornos_validos):
-                c = contornos_validos[i]
-                M = cv2.moments(c)
-                if M["m00"] != 0:
-                    cx = (M["m10"] / M["m00"]) / ancho
-                    cy = (M["m01"] / M["m00"]) / alto
+        # Asignar coordenadas de manos
+        if hand_result and hand_result.hand_landmarks:
+            for i, lms in enumerate(hand_result.hand_landmarks):
+                pts = np.array([[lm.x, lm.y, lm.z] for lm in lms], dtype=np.float32).flatten()
+                es_izq = False
+                if hand_result.handedness and i < len(hand_result.handedness):
+                    lado = hand_result.handedness[i][0].category_name
+                    es_izq = (lado.lower() == "left")
                 else:
-                    cx, cy = 0.0, 0.0
-                bx, by, bw, bh = cv2.boundingRect(c)
-                features.extend([cx, cy, bx / ancho, by / alto, bw / ancho, bh / alto])
+                    es_izq = (lms[0].x < 0.5)
 
-                # Muestrear puntos del contorno
-                puntos = c[:, 0, :]
-                if len(puntos) >= 10:
-                    indices = np.linspace(0, len(puntos) - 1, 15, dtype=int)
-                    muestreados = puntos[indices]
-                    for px, py in muestreados:
-                        features.extend([px / ancho, py / alto, 0.0])
+                if es_izq and np.all(mano_izq == 0):
+                    mano_izq = pts
+                elif not es_izq and np.all(mano_der == 0):
+                    mano_der = pts
+                elif np.all(mano_izq == 0):
+                    mano_izq = pts
                 else:
-                    features.extend([0.0] * 45)
-            else:
-                features.extend([0.0] * 51)
+                    mano_der = pts
 
-        # Rellenar o recortar al tamaño TOTAL_CARACTERISTICAS
-        vector_fallback = np.array(features, dtype=np.float32)
-        if len(vector_fallback) < TOTAL_CARACTERISTICAS:
-            vector_fallback = np.pad(vector_fallback, (0, TOTAL_CARACTERISTICAS - len(vector_fallback)))
-        else:
-            vector_fallback = vector_fallback[:TOTAL_CARACTERISTICAS]
+        # Asignar pose corporal
+        if pose_result and pose_result.pose_landmarks:
+            p_lms = pose_result.pose_landmarks[0]
+            pose_arr = np.array([[lm.x, lm.y, lm.z] for lm in p_lms], dtype=np.float32).flatten()
+            if len(pose_arr) > CANTIDAD_LANDMARKS_POSE:
+                pose_arr = pose_arr[:CANTIDAD_LANDMARKS_POSE]
 
-        info_fallback = {
-            "cara": cara_box,
-            "manos": [cv2.boundingRect(c) for c in contornos_validos[:2]]
+        vector_completo = np.concatenate([mano_izq, mano_der, pose_arr]).astype(np.float32)
+        if len(vector_completo) != TOTAL_CARACTERISTICAS:
+            vector_completo = np.pad(vector_completo, (0, max(0, TOTAL_CARACTERISTICAS - len(vector_completo))))[:TOTAL_CARACTERISTICAS]
+
+        info_results = {
+            "tipo": "tasks",
+            "hand_result": hand_result,
+            "pose_result": pose_result
         }
-        return vector_fallback, info_fallback
+        return vector_completo, info_results
+
+    def _procesar_neutro(self, frame_bgr: np.ndarray) -> Tuple[np.ndarray, Any]:
+        """Modo neutro seguro cuando no hay modelos de landmarks."""
+        vector = np.zeros(TOTAL_CARACTERISTICAS, dtype=np.float32)
+        return vector, {"tipo": "neutro"}
 
     def obtener_geometria_mano_rostro(self, results: Any) -> Dict[str, Any]:
-        """
-        Extrae explícitamente el estado de la mano, del rostro y la relación espacial entre ambos.
-        Permite validar que exista movimiento manual real cerca del rostro antes de clasificar dinámicas.
-        """
+        """Extrae métricas espaciales y de presencia de manos reales sobre el cuerpo."""
         datos = {
             "hay_mano": False,
             "hay_mano_izq": False,
@@ -312,116 +262,110 @@ class ExtractorLandmarks:
             "distancia_mano_rostro": None
         }
 
-        if self.usar_mediapipe and results is not None:
-            # 1. Verificar presencia de manos y calcular centroide
+        if isinstance(results, dict) and results.get("tipo") == "tasks":
+            hand_res = results.get("hand_result")
+            pose_res = results.get("pose_result")
+
             puntos_mano = []
-            if getattr(results, 'left_hand_landmarks', None):
-                datos["hay_mano_izq"] = True
-                puntos_mano.extend([(lm.x, lm.y) for lm in results.left_hand_landmarks.landmark])
-            if getattr(results, 'right_hand_landmarks', None):
-                datos["hay_mano_der"] = True
-                puntos_mano.extend([(lm.x, lm.y) for lm in results.right_hand_landmarks.landmark])
+            if hand_res and hand_res.hand_landmarks:
+                datos["hay_mano"] = True
+                for i, lms in enumerate(hand_res.hand_landmarks):
+                    if hand_res.handedness and i < len(hand_res.handedness):
+                        lado = hand_res.handedness[i][0].category_name
+                        if lado.lower() == "left":
+                            datos["hay_mano_izq"] = True
+                        else:
+                            datos["hay_mano_der"] = True
+                    for lm in lms:
+                        puntos_mano.append((lm.x, lm.y))
 
             if puntos_mano:
-                datos["hay_mano"] = True
                 arr_p = np.array(puntos_mano)
                 cx = float(np.mean(arr_p[:, 0]))
                 cy = float(np.mean(arr_p[:, 1]))
                 datos["centroide_mano"] = (cx, cy)
-
-            # 2. Verificar rostro y pose corporal
-            if getattr(results, 'pose_landmarks', None):
-                pose = results.pose_landmarks.landmark
-                # Nariz es landmark 0
-                nariz = pose[0]
-                if nariz.visibility > 0.4:
-                    datos["hay_rostro"] = True
-                    datos["posicion_nariz"] = (float(nariz.x), float(nariz.y))
-
-                # Hombros son landmarks 11 y 12
-                h_izq = pose[11]
-                h_der = pose[12]
-                if h_izq.visibility > 0.3 and h_der.visibility > 0.3:
-                    datos["altura_hombros"] = float((h_izq.y + h_der.y) / 2.0)
-
-            # 3. Relación espacial mano - rostro / torso
-            if datos["hay_mano"] and datos["centroide_mano"] is not None:
-                _, cy_mano = datos["centroide_mano"]
-
-                # La mano está en zona activa si está a la altura de los hombros o el rostro
-                if datos["altura_hombros"] is not None:
-                    datos["mano_en_zona_activa"] = cy_mano <= (datos["altura_hombros"] + 0.15)
-                elif datos["posicion_nariz"] is not None:
-                    datos["mano_en_zona_activa"] = cy_mano <= (datos["posicion_nariz"][1] + 0.35)
-                else:
-                    datos["mano_en_zona_activa"] = cy_mano < 0.85
-
-                if datos["posicion_nariz"] is not None:
-                    nx, ny = datos["posicion_nariz"]
-                    mx, my = datos["centroide_mano"]
-                    dist = float(np.sqrt((mx - nx)**2 + (my - ny)**2))
-                    datos["distancia_mano_rostro"] = dist
-
-        elif self.modo_fallback and isinstance(results, dict):
-            # Fallback
-            cara = results.get("cara")
-            manos = results.get("manos", [])
-            if cara is not None:
-                datos["hay_rostro"] = True
-                datos["posicion_nariz"] = (cara[0] / FRAME_ANCHO, cara[1] / FRAME_ALTO)
-            if manos:
-                datos["hay_mano"] = True
-                m = manos[0]
-                datos["centroide_mano"] = ((m[0] + m[2]/2) / FRAME_ANCHO, (m[1] + m[3]/2) / FRAME_ALTO)
                 datos["mano_en_zona_activa"] = True
+
+            if pose_res and pose_res.pose_landmarks:
+                p_lms = pose_res.pose_landmarks[0]
+                nariz = p_lms[0]
+                datos["hay_rostro"] = True
+                datos["posicion_nariz"] = (float(nariz.x), float(nariz.y))
+
+                h_izq = p_lms[11]
+                h_der = p_lms[12]
+                datos["altura_hombros"] = float((h_izq.y + h_der.y) / 2.0)
+
+                if datos["centroide_mano"] and datos["posicion_nariz"]:
+                    mx, my = datos["centroide_mano"]
+                    nx, ny = datos["posicion_nariz"]
+                    datos["distancia_mano_rostro"] = float(np.sqrt((mx - nx)**2 + (my - ny)**2))
 
         return datos
 
     def dibujar_landmarks(self, frame_bgr: np.ndarray, results: Any) -> np.ndarray:
-        """Dibuja los puntos sobre el frame original."""
+        """Dibuja el esqueleto articular completo y estético sobre las manos reales."""
         frame_copia = frame_bgr.copy()
-        if self.usar_mediapipe and results is not None:
-            # Dibujar manos
-            if getattr(results, 'left_hand_landmarks', None):
-                self.mp_drawing.draw_landmarks(
-                    frame_copia,
-                    results.left_hand_landmarks,
-                    self.mp_holistic.HAND_CONNECTIONS,
-                    self.mp_drawing_styles.get_default_hand_landmarks_style(),
-                    self.mp_drawing_styles.get_default_hand_connections_style()
-                )
-            if getattr(results, 'right_hand_landmarks', None):
-                self.mp_drawing.draw_landmarks(
-                    frame_copia,
-                    results.right_hand_landmarks,
-                    self.mp_holistic.HAND_CONNECTIONS,
-                    self.mp_drawing_styles.get_default_hand_landmarks_style(),
-                    self.mp_drawing_styles.get_default_hand_connections_style()
-                )
-            # Dibujar pose esencial
-            if getattr(results, 'pose_landmarks', None):
-                self.mp_drawing.draw_landmarks(
-                    frame_copia,
-                    results.pose_landmarks,
-                    self.mp_holistic.POSE_CONNECTIONS,
-                    landmark_drawing_spec=self.mp_drawing_styles.get_default_pose_landmarks_style()
-                )
-        elif self.modo_fallback and isinstance(results, dict):
-            # Dibujar información del modo fallback
-            if results.get("cara") is not None:
-                x, y, w, h = results["cara"]
-                cv2.rectangle(frame_copia, (x, y), (x + w, y + h), (255, 120, 0), 2)
-                cv2.putText(frame_copia, "Rostro", (x, y - 8), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 120, 0), 1)
-            for i, (mx, my, mw, mh) in enumerate(results.get("manos", [])):
-                cv2.rectangle(frame_copia, (mx, my), (mx + mw, my + mh), (0, 255, 128), 2)
-                cv2.putText(frame_copia, f"Mano {i+1}", (mx, my - 8), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 128), 1)
+
+        if isinstance(results, dict) and results.get("tipo") == "tasks":
+            alto, ancho = frame_copia.shape[:2]
+            hand_res = results.get("hand_result")
+            pose_res = results.get("pose_result")
+
+            # 1. Dibujar pose esencial (hombros, brazos y cabeza)
+            if pose_res and pose_res.pose_landmarks:
+                p_lms = pose_res.pose_landmarks[0]
+                for idx1, idx2 in CONEXIONES_POSE:
+                    if idx1 < len(p_lms) and idx2 < len(p_lms):
+                        pt1 = (int(p_lms[idx1].x * ancho), int(p_lms[idx1].y * alto))
+                        pt2 = (int(p_lms[idx2].x * ancho), int(p_lms[idx2].y * alto))
+                        cv2.line(frame_copia, pt1, pt2, (180, 180, 180), 2, cv2.LINE_AA)
+
+                for idx in [0, 11, 12, 13, 14, 15, 16]:
+                    if idx < len(p_lms):
+                        cx = int(p_lms[idx].x * ancho)
+                        cy = int(p_lms[idx].y * alto)
+                        cv2.circle(frame_copia, (cx, cy), 5, (0, 220, 255), -1, cv2.LINE_AA)
+
+            # 2. Dibujar manos con esqueleto articular preciso
+            if hand_res and hand_res.hand_landmarks:
+                for h_idx, lms in enumerate(hand_res.hand_landmarks):
+                    # Cian brillante para primera mano, magenta para segunda mano
+                    color_huesos = (255, 220, 0) if h_idx == 0 else (220, 60, 220)
+                    color_articulacion = (0, 255, 120)
+
+                    # Líneas óseas
+                    for idx1, idx2 in CONEXIONES_MANO:
+                        pt1 = (int(lms[idx1].x * ancho), int(lms[idx1].y * alto))
+                        pt2 = (int(lms[idx2].x * ancho), int(lms[idx2].y * alto))
+                        cv2.line(frame_copia, pt1, pt2, color_huesos, 2, cv2.LINE_AA)
+
+                    # Nudillos
+                    for lm in lms:
+                        cx, cy = int(lm.x * ancho), int(lm.y * alto)
+                        cv2.circle(frame_copia, (cx, cy), 4, color_articulacion, -1, cv2.LINE_AA)
+                        cv2.circle(frame_copia, (cx, cy), 2, (255, 255, 255), -1, cv2.LINE_AA)
+
+                    # Etiqueta limpia sobre la muñeca
+                    mx = int(lms[0].x * ancho)
+                    my = int(lms[0].y * alto)
+                    etiqueta = "Mano"
+                    if hand_res.handedness and h_idx < len(hand_res.handedness):
+                        etiqueta = f"Mano ({hand_res.handedness[h_idx][0].category_name})"
+                    cv2.putText(frame_copia, etiqueta, (mx - 25, max(20, my - 12)),
+                                cv2.FONT_HERSHEY_SIMPLEX, 0.55, color_huesos, 2, cv2.LINE_AA)
 
         return frame_copia
 
     def cerrar(self):
-        """Libera recursos del procesador."""
-        if self.usar_mediapipe and hasattr(self, 'holistic'):
-            self.holistic.close()
+        """Libera detectores de MediaPipe Tasks."""
+        try:
+            if self.hand_detector and hasattr(self.hand_detector, "close"):
+                self.hand_detector.close()
+            if self.pose_detector and hasattr(self.pose_detector, "close"):
+                self.pose_detector.close()
+        except Exception:
+            pass
 
 
 def generar_panel_derecho(
@@ -430,53 +374,19 @@ def generar_panel_derecho(
     extractor: ExtractorLandmarks,
     usar_canny: bool = True
 ) -> np.ndarray:
-    """
-    Genera el panel derecho para la visualización en ventana doble:
-    - Si usar_canny=True: Aplica filtro Canny con bordes estilizados en color neón/cian.
-    - Si usar_canny=False: Renderiza el esqueleto de landmarks sobre lienzo negro.
-    """
+    """Genera panel visual Canny neón o esqueleto sobre fondo negro."""
     alto, ancho = frame_bgr.shape[:2]
 
     if usar_canny:
-        # Preprocesar para Canny
         gris = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2GRAY)
         difuminado = cv2.GaussianBlur(gris, (5, 5), 0)
         bordes = cv2.Canny(difuminado, threshold1=40, threshold2=120)
 
-        # Crear panel RGB con bordes coloreados (cian/verde tecnológico)
         panel = np.zeros((alto, ancho, 3), dtype=np.uint8)
-        panel[bordes > 0] = (240, 200, 30)  # Cian/Celeste tecnológico
-
-        # Agregar encabezado discreto
-        cv2.putText(panel, "VISION ARTIFICIAL: FILTRO CANNY", (15, 30),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.6, (180, 180, 180), 1, cv2.LINE_AA)
+        panel[:, :, 0] = bordes
+        panel[:, :, 1] = bordes
+        panel[:, :, 2] = (bordes * 0.4).astype(np.uint8)
         return panel
     else:
-        # Esqueleto sobre fondo oscuro
-        panel = np.zeros((alto, ancho, 3), dtype=np.uint8)
-        if extractor.usar_mediapipe and results is not None:
-            if getattr(results, 'left_hand_landmarks', None):
-                extractor.mp_drawing.draw_landmarks(
-                    panel,
-                    results.left_hand_landmarks,
-                    extractor.mp_holistic.HAND_CONNECTIONS,
-                    extractor.mp_drawing_styles.get_default_hand_landmarks_style(),
-                    extractor.mp_drawing_styles.get_default_hand_connections_style()
-                )
-            if getattr(results, 'right_hand_landmarks', None):
-                extractor.mp_drawing.draw_landmarks(
-                    panel,
-                    results.right_hand_landmarks,
-                    extractor.mp_holistic.HAND_CONNECTIONS,
-                    extractor.mp_drawing_styles.get_default_hand_landmarks_style(),
-                    extractor.mp_drawing_styles.get_default_hand_connections_style()
-                )
-            if getattr(results, 'pose_landmarks', None):
-                extractor.mp_drawing.draw_landmarks(
-                    panel,
-                    results.pose_landmarks,
-                    extractor.mp_holistic.POSE_CONNECTIONS
-                )
-        cv2.putText(panel, "ESQUELETO LANDMARKS", (15, 30),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 128), 1, cv2.LINE_AA)
-        return panel
+        lienzo_negro = np.zeros((alto, ancho, 3), dtype=np.uint8)
+        return extractor.dibujar_landmarks(lienzo_negro, results)

@@ -51,6 +51,7 @@ from entrenamiento import (
     extraer_caracteristicas_dinamicas,
     RUTA_MODELO_JOBLIB
 )
+from ia_asistente import AsistenteIA
 
 # Intentar soporte joblib para inferencia
 try:
@@ -103,6 +104,7 @@ class InterfazTraductorApp:
             usar_clahe=config.USAR_FILTRO_CLAHE
         )
         self.traductor = TraductorSecuencias()
+        self.asistente_ia = AsistenteIA()
         self.modelo_estatico = None
         self.clases_estaticas: List[str] = []
         self.modelo_dinamico = None
@@ -524,6 +526,20 @@ class InterfazTraductorApp:
         )
         btn_limpiar.grid(row=1, column=1, sticky="ew", padx=(4, 0), pady=3)
 
+        self.btn_gemini_nlp = tk.Button(
+            actions_grid,
+            text="✨ Estructurar con Gemini (NLP)",
+            font=FONT_BOLD,
+            bg="#3B82F6",
+            fg=COLOR_TEXT_LIGHT,
+            activebackground="#2563EB",
+            relief=tk.FLAT,
+            pady=6,
+            cursor="hand2",
+            command=self.accion_mejorar_oracion_gemini
+        )
+        self.btn_gemini_nlp.grid(row=2, column=0, columnspan=2, sticky="ew", pady=(4, 2))
+
         actions_grid.columnconfigure(0, weight=1)
         actions_grid.columnconfigure(1, weight=1)
 
@@ -714,18 +730,60 @@ class InterfazTraductorApp:
         )
         self.btn_capturar.pack(fill=tk.X, padx=16, pady=(0, 8))
 
+        frame_acciones_muestra = tk.Frame(right_panel, bg=COLOR_PANEL_DARK)
+        frame_acciones_muestra.pack(fill=tk.X, padx=16, pady=(0, 10))
+
         btn_deshacer = tk.Button(
-            right_panel,
+            frame_acciones_muestra,
             text="↩ Borrar Última Muestra",
+            font=FONT_MAIN,
+            bg=COLOR_INPUT_DARK,
+            fg=COLOR_TEXT_LIGHT,
+            relief=tk.FLAT,
+            pady=6,
+            cursor="hand2",
+            command=self.accion_borrar_ultima_muestra
+        )
+        btn_deshacer.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 4))
+
+        self.btn_eliminar_sena_captura = tk.Button(
+            frame_acciones_muestra,
+            text="🗑️ Eliminar Seña",
             font=FONT_MAIN,
             bg=COLOR_INPUT_DARK,
             fg=COLOR_DANGER,
             relief=tk.FLAT,
             pady=6,
             cursor="hand2",
-            command=self.accion_borrar_ultima_muestra
+            command=self.accion_eliminar_sena_actual
         )
-        btn_deshacer.pack(fill=tk.X, padx=16, pady=(0, 12))
+        self.btn_eliminar_sena_captura.pack(side=tk.RIGHT, fill=tk.X, expand=True, padx=(4, 0))
+
+        # Validación pedagógica con Gemini Vision
+        self.btn_validar_gemini = tk.Button(
+            right_panel,
+            text="🔍 Validar Postura con Gemini AI",
+            font=FONT_BOLD,
+            bg="#2563EB",
+            fg=COLOR_TEXT_LIGHT,
+            activebackground="#1D4ED8",
+            relief=tk.FLAT,
+            pady=8,
+            cursor="hand2",
+            command=self.accion_validar_postura_gemini
+        )
+        self.btn_validar_gemini.pack(fill=tk.X, padx=16, pady=(0, 6))
+
+        self.lbl_feedback_gemini = tk.Label(
+            right_panel,
+            text="Presione 'Validar Postura' para recibir análisis de IA.",
+            font=("Segoe UI", 9),
+            bg=COLOR_PANEL_DARK,
+            fg=COLOR_TEXT_MUTED,
+            wraplength=380,
+            justify=tk.LEFT
+        )
+        self.lbl_feedback_gemini.pack(fill=tk.X, padx=16, pady=(0, 12))
 
         # Cargar catálogo de señas existentes
         self._refrescar_combo_senas_existentes()
@@ -759,9 +817,12 @@ class InterfazTraductorApp:
         self.tree_catalogo.column("Nombre", width=95, anchor="w")
         self.tree_catalogo.pack(fill=tk.BOTH, expand=True, padx=14, pady=(0, 10))
 
+        frame_botones_cat = tk.Frame(left_panel, bg=COLOR_PANEL_DARK)
+        frame_botones_cat.pack(fill=tk.X, padx=14, pady=(0, 14))
+
         btn_refrescar_cat = tk.Button(
-            left_panel,
-            text="🔄 Actualizar Lista de Señas",
+            frame_botones_cat,
+            text="🔄 Actualizar",
             font=FONT_MAIN,
             bg=COLOR_INPUT_DARK,
             fg=COLOR_TEXT_LIGHT,
@@ -770,7 +831,20 @@ class InterfazTraductorApp:
             cursor="hand2",
             command=self._refrescar_tabla_entrenamiento
         )
-        btn_refrescar_cat.pack(fill=tk.X, padx=14, pady=(0, 14))
+        btn_refrescar_cat.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 4))
+
+        btn_eliminar_cat = tk.Button(
+            frame_botones_cat,
+            text="🗑️ Eliminar Seña",
+            font=FONT_MAIN,
+            bg=COLOR_INPUT_DARK,
+            fg=COLOR_DANGER,
+            relief=tk.FLAT,
+            pady=6,
+            cursor="hand2",
+            command=self.accion_eliminar_sena_desde_catalogo
+        )
+        btn_eliminar_cat.pack(side=tk.RIGHT, fill=tk.X, expand=True, padx=(4, 0))
 
         # Panel derecho: Parámetros y Consola de Entrenamiento
         right_panel = tk.Frame(container, bg=COLOR_PANEL_DARK)
@@ -988,8 +1062,21 @@ class InterfazTraductorApp:
             selectbackground=COLOR_ACCENT,
             highlightthickness=0
         )
-        self.listbox_dic.pack(fill=tk.BOTH, expand=True, padx=14, pady=(0, 14))
+        self.listbox_dic.pack(fill=tk.BOTH, expand=True, padx=14, pady=(0, 8))
         self.listbox_dic.bind("<<ListboxSelect>>", self._al_seleccionar_seña_diccionario)
+
+        btn_eliminar_dic = tk.Button(
+            left_panel,
+            text="🗑️ Eliminar Seña Seleccionada",
+            font=FONT_MAIN,
+            bg=COLOR_INPUT_DARK,
+            fg=COLOR_DANGER,
+            relief=tk.FLAT,
+            pady=6,
+            cursor="hand2",
+            command=self.accion_eliminar_seña_diccionario
+        )
+        btn_eliminar_dic.pack(fill=tk.X, padx=14, pady=(0, 14))
 
         # Panel derecho: Visualizador de la Seña
         right_panel = tk.Frame(container, bg=COLOR_PANEL_DARK)
@@ -1129,6 +1216,39 @@ class InterfazTraductorApp:
             selectcolor=COLOR_BG_DARK,
             activebackground=COLOR_PANEL_DARK
         ).pack(anchor="w", pady=4)
+
+        # Configuración de Google Gemini AI Studio
+        tk.Label(card, text="Clave de API Google AI Studio (Gemini 2.5 Flash):", font=FONT_BOLD, bg=COLOR_PANEL_DARK, fg=COLOR_TEXT_LIGHT).pack(anchor="w", pady=(12, 2))
+        frame_api = tk.Frame(card, bg=COLOR_PANEL_DARK)
+        frame_api.pack(anchor="w", fill=tk.X, pady=(0, 8))
+
+        self.ent_api_key = tk.Entry(frame_api, font=FONT_MAIN, bg=COLOR_INPUT_DARK, fg=COLOR_TEXT_LIGHT, bd=0, insertbackground="white", width=42, show="•")
+        current_key = self.asistente_ia.api_key or ""
+        self.ent_api_key.insert(0, current_key)
+        self.ent_api_key.pack(side=tk.LEFT, ipady=4, padx=(0, 10))
+
+        self.btn_probar_api = tk.Button(
+            frame_api,
+            text="⚡ Probar Conexión con Gemini AI",
+            font=FONT_BOLD,
+            bg="#2563EB",
+            fg=COLOR_TEXT_LIGHT,
+            relief=tk.FLAT,
+            padx=12,
+            pady=4,
+            cursor="hand2",
+            command=self.accion_probar_conexion_gemini
+        )
+        self.btn_probar_api.pack(side=tk.LEFT)
+
+        self.lbl_status_api = tk.Label(
+            card,
+            text="Estado: API Configurada y Lista" if current_key else "Estado: Sin configurar",
+            font=("Segoe UI", 9),
+            bg=COLOR_PANEL_DARK,
+            fg=COLOR_SUCCESS if current_key else COLOR_WARNING
+        )
+        self.lbl_status_api.pack(anchor="w", pady=(0, 10))
 
         btn_guardar_cfg = tk.Button(
             card,
@@ -1377,11 +1497,22 @@ class InterfazTraductorApp:
 
             # RAMA ESTÁTICA
             elif es_estatica and self.clases_estaticas:
-                self.buffer_secuencia_dinamica.clear()
-                self.trayectoria_centroides_mano.clear()
+                # Si veníamos de un gesto dinámico y la mano se frenó, clasificar el gesto completado
+                if len(self.buffer_secuencia_dinamica) >= 12 and self.clases_dinamicas:
+                    seña_d, conf_d = self._clasificar_secuencia_dinamica(self.buffer_secuencia_dinamica)
+                    self.buffer_secuencia_dinamica.clear()
+                    self.trayectoria_centroides_mano.clear()
+                    if seña_d and not seña_d.startswith("_") and conf_d >= config.UMBRAL_CONFIANZA:
+                        palabra_d = self.traductor.procesar_gesto_dinamico(seña_d, conf_d)
+                        if palabra_d:
+                            self._al_confirmar_seña(seña_d, palabra_d, conf_d, "dinamica")
+                            return
+                else:
+                    self.buffer_secuencia_dinamica.clear()
+                    self.trayectoria_centroides_mano.clear()
 
                 seña, conf = self._clasificar_frame_estatico(vector)
-                if seña and conf >= config.UMBRAL_CONFIANZA:
+                if seña and not seña.startswith("_") and conf >= config.UMBRAL_CONFIANZA:
                     if seña != self.postura_en_observacion:
                         self.postura_en_observacion = seña
                         self.tiempo_inicio_postura = ahora
@@ -1443,7 +1574,10 @@ class InterfazTraductorApp:
         try:
             proba = self.modelo_estatico.predict_proba([vector])[0]
             idx = int(np.argmax(proba))
-            return self.clases_estaticas[idx], float(proba[idx])
+            clase = self.clases_estaticas[idx]
+            if clase.startswith("_"):
+                return None, 0.0
+            return clase, float(proba[idx])
         except Exception:
             return None, 0.0
 
@@ -1641,6 +1775,9 @@ class InterfazTraductorApp:
         if nombres:
             self.combo_senas_existentes.set(nombres[0])
             self._al_seleccionar_sena_existente(None)
+        else:
+            self.combo_senas_existentes.set("")
+            self.lbl_conteo_muestras.configure(text="Muestras: Train: 0 | Val: 0 | Total: 0")
 
     def _al_seleccionar_sena_existente(self, _event):
         nombre = self.combo_senas_existentes.get()
@@ -1655,6 +1792,75 @@ class InterfazTraductorApp:
         self.lbl_conteo_muestras.configure(
             text=f"Muestras: Train: {conteo['entrenamiento']} | Val: {conteo['validacion']} | Total: {conteo['total']}"
         )
+
+    def _ejecutar_eliminacion_sena(self, nombre_sena: str):
+        """Lógica común para confirmar y eliminar permanentemente una seña y sus archivos."""
+        if not nombre_sena:
+            messagebox.showwarning("Atención", "No se especificó ninguna seña para eliminar.")
+            return
+
+        sena_info = db.obtener_sena_por_nombre(nombre_sena)
+        if not sena_info:
+            messagebox.showwarning("No Encontrada", f"La seña '{nombre_sena}' no existe en la base de datos.")
+            return
+
+        conteos = db.obtener_conteo_muestras_por_sena(sena_info["id"])
+        total_m = conteos.get("total", 0)
+
+        pregunta = (
+            f"¿Está seguro de que desea eliminar permanentemente la seña '{nombre_sena}'?\n\n"
+            f"• Tipo: {sena_info['tipo'].upper()}\n"
+            f"• Muestras registradas: {total_m}\n\n"
+            "Esta acción borrará el registro de la base de datos y todas sus muestras (.npy e imágenes) en disco.\n"
+            "¿Desea continuar?"
+        )
+
+        if not messagebox.askyesno("Confirmar Eliminación de Seña", pregunta, icon="warning"):
+            return
+
+        exito, msg, n_borrados = db.eliminar_sena_completa(sena_info["id"])
+        if exito:
+            # Refrescar todas las vistas afectadas
+            self._refrescar_combo_senas_existentes()
+            self._refrescar_tabla_entrenamiento()
+            self._refrescar_lista_diccionario()
+
+            if hasattr(self, "ent_nombre_sena"):
+                self.ent_nombre_sena.delete(0, tk.END)
+
+            if hasattr(self, "lbl_status_global"):
+                self.lbl_status_global.configure(text=f"Seña '{nombre_sena}' eliminada ({n_borrados} archivos borrados).")
+
+            messagebox.showinfo("Seña Eliminada", f"La seña '{nombre_sena}' ha sido eliminada correctamente del sistema.")
+        else:
+            messagebox.showerror("Error al Eliminar", msg)
+
+    def accion_eliminar_sena_actual(self):
+        """Elimina la seña seleccionada o indicada en el formulario de captura."""
+        nombre_sena = self._obtener_nombre_sena_actual()
+        self._ejecutar_eliminacion_sena(nombre_sena)
+
+    def accion_eliminar_sena_desde_catalogo(self):
+        """Elimina la seña seleccionada en la tabla de la pestaña Entrenamiento."""
+        seleccion = self.tree_catalogo.selection()
+        if not seleccion:
+            messagebox.showwarning("Selección Requerida", "Por favor, seleccione una seña en la tabla del catálogo para eliminar.")
+            return
+        item = self.tree_catalogo.item(seleccion[0])
+        valores = item.get("values", [])
+        if valores:
+            nombre_sena = str(valores[0]).strip().upper()
+            self._ejecutar_eliminacion_sena(nombre_sena)
+
+    def accion_eliminar_seña_diccionario(self):
+        """Elimina la seña seleccionada en la lista del Diccionario Visual."""
+        seleccion = self.listbox_dic.curselection()
+        if not seleccion:
+            messagebox.showwarning("Selección Requerida", "Por favor, seleccione una seña de la lista para eliminar.")
+            return
+        texto = self.listbox_dic.get(seleccion[0])
+        nombre_sena = texto.split(" ")[0].strip().upper()
+        self._ejecutar_eliminacion_sena(nombre_sena)
 
     # =========================================================================
     # ACCIONES DE ENTRENAMIENTO EN SEGUNDO PLANO
@@ -1855,6 +2061,88 @@ class InterfazTraductorApp:
         self.lbl_sena_grande.configure(text="---")
         self.predicciones_sesion.clear()
 
+    def accion_mejorar_oracion_gemini(self):
+        """Usa Gemini para convertir las glosas acumuladas en una oración fluida en español."""
+        texto_actual = self.txt_traduccion.get("1.0", tk.END).strip()
+        if not texto_actual:
+            messagebox.showinfo("Sin texto", "Realice señas o ingrese palabras antes de solicitar la traducción con IA.")
+            return
+
+        palabras = self.traductor.palabras_acumuladas if self.traductor.palabras_acumuladas else texto_actual.split()
+
+        self.btn_gemini_nlp.configure(state=tk.DISABLED, text="⏳ Estructurando con Gemini...")
+
+        def _tarea():
+            oracion = self.asistente_ia.estructurar_oracion_natural(palabras)
+            def _aplicar():
+                self.txt_traduccion.delete("1.0", tk.END)
+                self.txt_traduccion.insert(tk.END, oracion)
+                self.btn_gemini_nlp.configure(state=tk.NORMAL, text="✨ Estructurar con Gemini (NLP)")
+                if config.VOZ_HABILITADA:
+                    self.traductor.motor_voz.hablar(oracion)
+            self.root.after(0, _aplicar)
+
+        threading.Thread(target=_tarea, daemon=True).start()
+
+    def accion_validar_postura_gemini(self):
+        """Envía el fotograma actual a Gemini Vision para evaluar la calidad y precisión de la postura."""
+        if not self.camara_activa:
+            messagebox.showwarning("Cámara Inactiva", "Inicie la cámara web primero para capturar la postura.")
+            return
+
+        nombre_sena = self._obtener_nombre_sena_actual()
+        if not nombre_sena:
+            messagebox.showwarning("Nombre Requerido", "Ingrese o seleccione un nombre de seña a validar.")
+            return
+
+        with self.bloqueo_frame:
+            frame = self.frame_bgr_reciente.copy() if self.frame_bgr_reciente is not None else None
+
+        if frame is None:
+            messagebox.showwarning("Sin Frame", "No hay fotograma disponible de la cámara.")
+            return
+
+        tipo = self.var_tipo_sena.get()
+        self.btn_validar_gemini.configure(state=tk.DISABLED, text="⏳ Consultando a Gemini Vision...")
+        self.lbl_feedback_gemini.configure(text="Analizando postura e iluminación con Gemini Vision...", fg=COLOR_INFO)
+
+        def _tarea():
+            resultado = self.asistente_ia.validar_calidad_sena(frame, nombre_sena, tipo)
+            def _aplicar():
+                self.btn_validar_gemini.configure(state=tk.NORMAL, text="🔍 Validar Postura con Gemini AI")
+                valida = resultado.get("valida", True)
+                calidad = resultado.get("calidad", "media").upper()
+                diag = resultado.get("diagnostico", "")
+                recom = resultado.get("recomendacion", "")
+
+                color = COLOR_SUCCESS if valida else COLOR_WARNING
+                icono = "✅" if valida else "⚠️"
+                texto = f"{icono} [{calidad}] {diag}\n💡 Consejo: {recom}"
+                self.lbl_feedback_gemini.configure(text=texto, fg=color)
+            self.root.after(0, _aplicar)
+
+        threading.Thread(target=_tarea, daemon=True).start()
+
+    def accion_probar_conexion_gemini(self):
+        """Prueba la conexión y API Key con Google AI Studio."""
+        nueva_key = self.ent_api_key.get().strip()
+        if nueva_key:
+            self.asistente_ia.actualizar_api_key(nueva_key)
+
+        self.btn_probar_api.configure(state=tk.DISABLED, text="⏳ Verificando...")
+        def _tarea():
+            ok, msg = self.asistente_ia.verificar_conexion()
+            def _aplicar():
+                self.btn_probar_api.configure(state=tk.NORMAL, text="⚡ Probar Conexión con Gemini AI")
+                if ok:
+                    self.lbl_status_api.configure(text=f"🟢 {msg}", fg=COLOR_SUCCESS)
+                    messagebox.showinfo("Gemini AI", "¡Conexión establecida correctamente con Google Gemini 2.5 Flash!")
+                else:
+                    self.lbl_status_api.configure(text=f"🔴 Error de conexión", fg=COLOR_DANGER)
+                    messagebox.showerror("Error de API", f"No se pudo conectar con Gemini AI:\n{msg}")
+            self.root.after(0, _aplicar)
+        threading.Thread(target=_tarea, daemon=True).start()
+
     # =========================================================================
     # CONFIGURACIÓN Y GUARDADO DE PARÁMETROS
     # =========================================================================
@@ -1866,6 +2154,11 @@ class InterfazTraductorApp:
             config.TIEMPO_COOLDOWN_POST_DETECCION = float(self.scale_cooldown.get())
             config.USAR_FILTRO_CLAHE = self.var_clahe.get()
             config.VOZ_HABILITADA = self.var_voz.get()
+
+            # Clave de API de Gemini
+            nueva_key = self.ent_api_key.get().strip()
+            if nueva_key:
+                self.asistente_ia.actualizar_api_key(nueva_key)
 
             self.extractor.usar_clahe = config.USAR_FILTRO_CLAHE
             self.traductor.motor_voz.set_habilitado(config.VOZ_HABILITADA)

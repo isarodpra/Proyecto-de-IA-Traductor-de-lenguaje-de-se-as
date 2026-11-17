@@ -250,8 +250,16 @@ def abrir_camara_robusta(
                     except Exception:
                         pass
 
-                    # Leer un frame de prueba
-                    ret, frame = cap.read()
+                    # Dar hasta 5 lecturas para permitir la autoexposición del sensor de la webcam
+                    frame = None
+                    ret = False
+                    for _ in range(5):
+                        ret, frame = cap.read()
+                        if ret and frame is not None and frame.mean() > 2.0:
+                            break
+                        import time
+                        time.sleep(0.04)
+
                     if ret and frame is not None:
                         # Si tiene brillo real (no es pantalla negra de cámara virtual)
                         if frame.mean() > 2.0:
