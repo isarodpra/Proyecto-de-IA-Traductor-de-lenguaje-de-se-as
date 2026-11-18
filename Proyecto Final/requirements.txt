@@ -1,8 +1,30 @@
+# ==============================================================================
+# DEPENDENCIAS DEL TRADUCTOR DE LENGUAJE DE SEÑAS EN TIEMPO REAL
+# Compatible con Python 3.10 - 3.13 en Windows / macOS / Linux
+# ==============================================================================
+
+# --- Visión por Computadora y Detección Articular ---
 opencv-python>=4.8.0
-mediapipe>=0.10.9
-tensorflow>=2.15.0
+mediapipe>=0.10.14
+pillow>=10.0.0
+
+# --- Procesamiento Numérico y Científico ---
 numpy>=1.24.0
-pyttsx3>=2.90
+
+# --- Machine Learning y Redes Neuronales ---
 scikit-learn>=1.3.0
 joblib>=1.3.0
-pillow>=10.0.0
+tensorflow>=2.15.0
+
+# --- Inteligencia Artificial y LLM (Google AI Studio / Gemini Vision & NLP) ---
+google-genai>=0.1.0
+google-generativeai>=0.8.0
+
+# --- Gestión de Configuración y Variables de Entorno ---
+python-dotenv>=1.0.0
+
+# --- Síntesis de Voz (Text-to-Speech) ---
+pyttsx3>=2.90
+
+# --- Visualización y Reportes de Métricas ---
+matplotlib>=3.7.0
