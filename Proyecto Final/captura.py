@@ -121,7 +121,7 @@ def _capturar_nueva_sena():
     ejecutar_captura_en_vivo(sena_id, nombre.upper(), tipo)
 
 
-def ejecutar_captura_en_vivo(sena_id: int, nombre_sena: str, tipo_sena: str):
+def ejecutar_captura_en_vivo(sena_id: int, nombre_sena: str, tipo_sena: str, frames_secuencia: int = FRAMES_POR_SECUENCIA):
     """Abre la cámara y gestiona la captura visual interactiva."""
     from utils import abrir_camara_robusta
     cap, idx_usado = abrir_camara_robusta(CAMARA_INDEX, FRAME_ANCHO, FRAME_ALTO)
@@ -196,26 +196,26 @@ def ejecutar_captura_en_vivo(sena_id: int, nombre_sena: str, tipo_sena: str):
                 conteo_secuencia += 1
 
                 # Visualizar barra de progreso de la secuencia
-                progreso = conteo_secuencia / FRAMES_POR_SECUENCIA
+                progreso = conteo_secuencia / frames_secuencia
                 ancho_barra = int(frame.shape[1] * 0.8)
                 x_inicio = int(frame.shape[1] * 0.1)
                 y_pos = frame.shape[0] - 40
                 cv2.rectangle(frame_dibujado, (x_inicio, y_pos), (x_inicio + ancho_barra, y_pos + 18), (40, 40, 40), -1)
                 cv2.rectangle(frame_dibujado, (x_inicio, y_pos), (x_inicio + int(ancho_barra * progreso), y_pos + 18), (0, 120, 255), -1)
-                cv2.putText(frame_dibujado, f"GRABANDO SECUENCIA: {conteo_secuencia}/{FRAMES_POR_SECUENCIA}",
+                cv2.putText(frame_dibujado, f"GRABANDO SECUENCIA: {conteo_secuencia}/{frames_secuencia} ({frames_secuencia/30:.1f}s)",
                             (x_inicio + 10, y_pos - 8), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (0, 140, 255), 2)
 
-                if conteo_secuencia >= FRAMES_POR_SECUENCIA:
+                if conteo_secuencia >= frames_secuencia:
                     # Guardar secuencia .npy
                     timestamp = int(time.time() * 1000)
                     carpeta_destino = dir_dinamicas_train if conjunto_actual == "entrenamiento" else dir_dinamicas_val
                     ruta_npy = carpeta_destino / f"seq_{nombre_sena}_{timestamp}.npy"
 
-                    arr_secuencia = np.array(secuencia_buffer, dtype=np.float32)  # Forma: (30, TOTAL_CARACTERISTICAS)
+                    arr_secuencia = np.array(secuencia_buffer, dtype=np.float32)  # Forma: (N, TOTAL_CARACTERISTICAS)
                     np.save(str(ruta_npy), arr_secuencia)
 
                     # Guardar en base de datos
-                    db.guardar_secuencia(sena_id, conjunto_actual, str(ruta_npy), FRAMES_POR_SECUENCIA)
+                    db.guardar_secuencia(sena_id, conjunto_actual, str(ruta_npy), frames_secuencia)
 
                     mensaje_notificacion = f"Secuencia guardada ({conteo_secuencia} frames)"
                     tiempo_notificacion = time.time()

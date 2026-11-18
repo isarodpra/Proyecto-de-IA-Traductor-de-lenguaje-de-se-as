@@ -26,8 +26,15 @@ FRAME_ALTO = 480
 FPS_OBJETIVO = 30
 
 # Parámetros para señas dinámicas y temporales
-FRAMES_POR_SECUENCIA = 30  # Cantidad de frames para una muestra dinámica
-BUFFER_HISTORIAL_FRAMES = 30  # Longitud del buffer deslizante en reconocimiento en vivo
+FRAMES_POR_SECUENCIA = 45  # Cantidad estándar de frames para una muestra dinámica (1.5s a 30 FPS)
+BUFFER_HISTORIAL_FRAMES = 45  # Longitud del buffer deslizante en reconocimiento en vivo
+OPCIONES_DURACION_DINAMICA = {
+    "Normal (1.5s / 45 frames)": 45,
+    "Extendida (2.0s / 60 frames)": 60,
+    "Lenta (2.5s / 75 frames)": 75,
+    "Rápida (1.0s / 30 frames)": 30
+}
+DURACION_DINAMICA_DEFECTO = 45
 
 # Dimensiones del vector de características (Landmarks)
 # Mano izquierda: 21 * 3 = 63

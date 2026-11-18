@@ -30,6 +30,7 @@ from config import (
 )
 import db
 from landmarks import normalizar_vector_landmarks
+from utils import interpolar_secuencia_temporal
 
 # Soporte scikit-learn
 HAY_SKLEARN = False
@@ -149,7 +150,9 @@ def cargar_datos_clasificados() -> Dict[str, Any]:
             dir_val = DIR_SECUENCIAS / nombre / "validacion"
             for f in list(dir_train.glob("*.npy")) + list(dir_val.glob("*.npy")):
                 arr = np.load(str(f))
-                if arr.shape == (FRAMES_POR_SECUENCIA, TOTAL_CARACTERISTICAS):
+                if arr.ndim == 2 and arr.shape[1] == TOTAL_CARACTERISTICAS and len(arr) >= 6:
+                    if arr.shape[0] != FRAMES_POR_SECUENCIA:
+                        arr = interpolar_secuencia_temporal(arr, FRAMES_POR_SECUENCIA)
                     if NORMALIZAR_LANDMARKS:
                         arr = np.array([normalizar_vector_landmarks(f_v) for f_v in arr], dtype=np.float32)
                     secuencias.append(arr)

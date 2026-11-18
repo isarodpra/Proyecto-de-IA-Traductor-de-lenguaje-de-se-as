@@ -282,3 +282,35 @@ def abrir_camara_robusta(
         return candidato_fallback, idx_fallback
 
     return None, -1
+
+
+def interpolar_secuencia_temporal(
+    secuencia: np.ndarray,
+    num_frames_destino: int = 45
+) -> np.ndarray:
+    """
+    Normaliza la duración de una secuencia temporal de landmarks a exactamente 'num_frames_destino'
+    utilizando interpolación lineal continua a lo largo del eje temporal.
+    Permite reconocer señas independientemente de si se realizaron de forma rápida, lenta o pausada.
+    """
+    sec = np.asarray(secuencia, dtype=np.float32)
+    if sec.ndim != 2:
+        raise ValueError(f"Se esperaba array 2D (T, D), recibido: {sec.shape}")
+
+    t_actual, d_caract = sec.shape
+
+    if t_actual == num_frames_destino:
+        return sec.copy()
+
+    if t_actual < 2:
+        return np.repeat(sec, num_frames_destino, axis=0)
+
+    tiempo_orig = np.linspace(0.0, 1.0, num=t_actual)
+    tiempo_dest = np.linspace(0.0, 1.0, num=num_frames_destino)
+
+    secuencia_interpolada = np.empty((num_frames_destino, d_caract), dtype=np.float32)
+    for c in range(d_caract):
+        secuencia_interpolada[:, c] = np.interp(tiempo_dest, tiempo_orig, sec[:, c])
+
+    return secuencia_interpolada
+

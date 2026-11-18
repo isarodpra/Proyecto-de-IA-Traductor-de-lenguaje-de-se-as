@@ -52,6 +52,7 @@ from entrenamiento import (
     RUTA_MODELO_JOBLIB
 )
 from ia_asistente import AsistenteIA
+from utils import interpolar_secuencia_temporal
 
 # Intentar soporte joblib para inferencia
 try:
@@ -682,6 +683,27 @@ class InterfazTraductorApp:
             selectcolor=COLOR_BG_DARK,
             activebackground=COLOR_PANEL_DARK
         ).pack(anchor="w")
+
+        # Duración de captura para gestos dinámicos (Configurable para movimientos completos)
+        self.frame_duracion_dinamica = tk.Frame(form_frame, bg=COLOR_PANEL_DARK)
+        self.frame_duracion_dinamica.pack(fill=tk.X, pady=(0, 10))
+
+        tk.Label(
+            self.frame_duracion_dinamica,
+            text="⏱️ Duración de gesto (Dinámico):",
+            font=FONT_MAIN,
+            bg=COLOR_PANEL_DARK,
+            fg=COLOR_TEXT_MUTED
+        ).pack(anchor="w")
+
+        self.var_duracion_dinamica = tk.StringVar(value="Normal (1.5s / 45 frames)")
+        self.combo_duracion_dinamica = ttk.Combobox(
+            self.frame_duracion_dinamica,
+            textvariable=self.var_duracion_dinamica,
+            values=list(config.OPCIONES_DURACION_DINAMICA.keys()),
+            state="readonly"
+        )
+        self.combo_duracion_dinamica.pack(fill=tk.X, pady=(2, 0))
 
         # Conjunto de destino (Train / Val / Test)
         tk.Label(form_frame, text="Conjunto de datos:", font=FONT_BOLD, bg=COLOR_PANEL_DARK, fg=COLOR_TEXT_LIGHT).pack(anchor="w")
@@ -1586,7 +1608,9 @@ class InterfazTraductorApp:
             return None, 0.0
         try:
             arr_sec = np.array(secuencia, dtype=np.float32)
-            if len(arr_sec) < config.FRAMES_POR_SECUENCIA:
+            if len(arr_sec) >= 6:
+                arr_sec = interpolar_secuencia_temporal(arr_sec, config.FRAMES_POR_SECUENCIA)
+            elif len(arr_sec) < config.FRAMES_POR_SECUENCIA:
                 arr_sec = np.pad(arr_sec, ((0, config.FRAMES_POR_SECUENCIA - len(arr_sec)), (0, 0)), mode="edge")
             else:
                 arr_sec = arr_sec[-config.FRAMES_POR_SECUENCIA:]
@@ -1614,9 +1638,10 @@ class InterfazTraductorApp:
         if self.grabando_dinamica:
             self.frames_grabados_dinamicos.append(vector)
             total_grabados = len(self.frames_grabados_dinamicos)
+            dur_objetivo = self._obtener_frames_objetivo_dinamico()
             cv2.putText(
                 frame_dibujado,
-                f"GRABANDO: {total_grabados}/{config.FRAMES_POR_SECUENCIA}",
+                f"GRABANDO: {total_grabados}/{dur_objetivo} ({total_grabados/30:.1f}s)",
                 (30, 60),
                 cv2.FONT_HERSHEY_SIMPLEX,
                 1.0,
@@ -1624,7 +1649,7 @@ class InterfazTraductorApp:
                 3
             )
 
-            if total_grabados >= config.FRAMES_POR_SECUENCIA:
+            if total_grabados >= dur_objetivo:
                 self._finalizar_grabacion_dinamica()
 
         self._dibujar_frame_en_canvas(self.canvas_captura, frame_dibujado)
@@ -1683,27 +1708,29 @@ class InterfazTraductorApp:
             self.btn_capturar.configure(text="GRABANDO GESTO... 🔴", bg=COLOR_DANGER)
 
     def _finalizar_grabacion_dinamica(self):
-        """Guarda la secuencia de 30 frames en disco y SQLite."""
+        """Guarda la secuencia de frames en disco y SQLite."""
         self.grabando_dinamica = False
         self.btn_capturar.configure(text="📷 CAPTURAR MUESTRA", bg=COLOR_ACCENT)
 
         nombre_sena = self._obtener_nombre_sena_actual()
         conjunto = self.var_conjunto.get()
         sena_id = db.obtener_o_crear_sena(nombre_sena, "dinamica")
+        dur_objetivo = self._obtener_frames_objetivo_dinamico()
 
         dir_guardar = config.DIR_SECUENCIAS / nombre_sena / conjunto
         dir_guardar.mkdir(parents=True, exist_ok=True)
         timestamp = int(time.time() * 1000)
         ruta_npy = dir_guardar / f"seq_{nombre_sena}_{timestamp}.npy"
 
-        arr_seq = np.array(self.frames_grabados_dinamicos[:config.FRAMES_POR_SECUENCIA], dtype=np.float32)
+        arr_seq = np.array(self.frames_grabados_dinamicos[:dur_objetivo], dtype=np.float32)
         np.save(str(ruta_npy), arr_seq)
 
         db.guardar_secuencia(sena_id, conjunto, str(ruta_npy), len(arr_seq))
         self.total_muestras_guardadas += 1
         self._actualizar_conteo_muestras_sena(sena_id)
-        self.lbl_status_global.configure(text=f"Secuencia dinámica de 30 frames guardada para '{nombre_sena}'.")
-        messagebox.showinfo("Gesto Guardado", f"¡Secuencia dinámica para '{nombre_sena}' guardada exitosamente!")
+        segundos = len(arr_seq) / 30.0
+        self.lbl_status_global.configure(text=f"Secuencia dinámica de {len(arr_seq)} frames ({segundos:.1f}s) guardada para '{nombre_sena}'.")
+        messagebox.showinfo("Gesto Guardado", f"¡Secuencia dinámica para '{nombre_sena}' guardada exitosamente!\n\n• Duración: {segundos:.1f} segundos ({len(arr_seq)} frames)\n• Conjunto: {conjunto.capitalize()}")
 
     def accion_borrar_ultima_muestra(self):
         """Elimina la última muestra agregada de la base de datos y disco."""
@@ -1758,6 +1785,13 @@ class InterfazTraductorApp:
             return self.ent_nombre_sena.get().strip().upper()
         else:
             return self.combo_senas_existentes.get().strip().upper()
+
+    def _obtener_frames_objetivo_dinamico(self) -> int:
+        """Determina la cantidad de frames deseados para la grabación dinámica."""
+        if hasattr(self, "var_duracion_dinamica"):
+            texto = self.var_duracion_dinamica.get()
+            return config.OPCIONES_DURACION_DINAMICA.get(texto, config.FRAMES_POR_SECUENCIA)
+        return config.FRAMES_POR_SECUENCIA
 
     def _actualizar_estado_formulario_captura(self):
         modo = self.var_modo_seleccion.get()

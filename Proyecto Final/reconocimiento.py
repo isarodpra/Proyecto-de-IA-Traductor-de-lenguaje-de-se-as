@@ -43,7 +43,8 @@ from utils import (
     dibujar_barra_confianza,
     superponer_panel_translucido,
     unir_paneles,
-    dibujar_panel_traduccion_multilinea
+    dibujar_panel_traduccion_multilinea,
+    interpolar_secuencia_temporal
 )
 from entrenamiento import (
     RUTA_MODELO_JOBLIB,
@@ -171,10 +172,10 @@ class ReconocedorEnVivo:
             return None, 0.0
 
         arr_sec = np.array(secuencia, dtype=np.float32)
-        if len(arr_sec) < FRAMES_POR_SECUENCIA:
+        if len(arr_sec) >= 6:
+            arr_sec = interpolar_secuencia_temporal(arr_sec, FRAMES_POR_SECUENCIA)
+        elif len(arr_sec) < FRAMES_POR_SECUENCIA:
             arr_sec = np.pad(arr_sec, ((0, FRAMES_POR_SECUENCIA - len(arr_sec)), (0, 0)), mode='edge')
-        else:
-            arr_sec = arr_sec[-FRAMES_POR_SECUENCIA:]
 
         features = extraer_caracteristicas_dinamicas(arr_sec)
         t0 = time.time()
